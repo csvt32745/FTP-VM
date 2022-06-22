@@ -1,33 +1,39 @@
+# import cv2
+# cv2.setNumThreads(0)
+
 import datetime
+import time
 from os import path
 import math
 
 import random
 import numpy as np
 import torch
-from torch.utils.data import DataLoader, ConcatDataset
-import torch.distributed as distributed
+from torch.utils.data.dataloader import DataLoader
+from fastai.data.load import DataLoader as FAIDataLoader
 
 from model.model import PropagationModel
-from dataset.static_dataset import StaticTransformDataset
-from dataset.vos_dataset import VOSDataset
+from dataset.youtubevis import *
+from dataset.imagematte import *
+from dataset.videomatte import *
+from dataset.augmentation import *
 
 from util.logger import TensorboardLogger
 from util.hyper_para import HyperParameters
-from util.load_subset import load_sub_davis, load_sub_yv
 
+# from torch.multiprocessing import set_start_method
+# if __name__ == '__main__':
+    # prevent from deadlock
+    # set_start_method('spawn')
+    
 
 """
 Initial setup
 """
-# Init distributed environment
-distributed.init_process_group(backend="nccl")
-# Set seed to ensure the same initialization
 torch.manual_seed(14159265)
 np.random.seed(14159265)
 random.seed(14159265)
 
-print('CUDA Device count: ', torch.cuda.device_count())
 
 # Parse command line arguments
 para = HyperParameters()
@@ -36,39 +42,34 @@ para.parse()
 if para['benchmark']:
     torch.backends.cudnn.benchmark = True
 
-local_rank = torch.distributed.get_rank()
-world_size = torch.distributed.get_world_size()
-torch.cuda.set_device(local_rank)
-
-print('I am rank %d in this world of size %d!' % (local_rank, world_size))
-
 """
 Model related
 """
-if local_rank == 0:
-    # Logging
-    if para['id'].lower() != 'null':
-        print('I will take the role of logging!')
-        long_id = '%s_%s' % (datetime.datetime.now().strftime('%b%d_%H.%M.%S'), para['id'])
-    else:
-        long_id = None
-    logger = TensorboardLogger(para['id'], long_id)
-    logger.log_string('hyperpara', str(para))
 
-    # Construct the rank 0 model
-    model = PropagationModel(para, logger=logger, 
-                    save_path=path.join('saves', long_id, long_id) if long_id is not None else None, 
-                    local_rank=local_rank, world_size=world_size).train()
-else:
-    # Construct model for other ranks
-    model = PropagationModel(para, local_rank=local_rank, world_size=world_size).train()
+long_id = '%s_%s' % (datetime.datetime.now().strftime('%b%d_%H.%M.%S'), para['id'])
+logger = TensorboardLogger(para['id'], long_id)
+logger.log_string('hyperpara', str(para))
+
+# Construct the rank 0 model
+model = PropagationModel(para, logger=logger, 
+                save_path=path.join('saves', long_id, long_id) if long_id is not None else None).train()
 
 # Load pertrained model if needed
+seg_count = (1 - para['seg_start']) # delay start
+if seg_count < 0:
+    seg_count += para['seg_cd']
+seg_iter = 0 if para['seg_start'] == 0 else 1e5 # 0 for seg initially, 1e5 for delay
 if para['load_model'] is not None:
-    total_iter = model.load_model(para['load_model'])
+    total_iter, extra_dict = model.load_model(para['load_model'], ['seg_count', 'seg_iter'])
     print('Previously trained model loaded!')
+    if extra_dict['seg_count'] is not None:
+        seg_count = extra_dict['seg_count']# - 10000 + para['seg_cd']
+    if extra_dict['seg_iter'] is not None:
+        seg_iter = extra_dict['seg_iter']
 else:
     total_iter = 0
+
+print('seg_count: %d, seg_iter: %d'%(seg_count, seg_iter))
 
 if para['load_network'] is not None:
     model.load_network(para['load_network'])
@@ -79,122 +80,166 @@ Dataloader related
 """
 # To re-seed the randomness everytime we start a worker
 def worker_init_fn(worker_id): 
-    return np.random.seed(torch.initial_seed()%(2**31) + worker_id + local_rank*100)
+    return np.random.seed(torch.initial_seed()%(2**31))
+    # return np.random.seed(torch.initial_seed()%(2**31) + worker_id + local_rank*100)
 
-def construct_loader(dataset):
-    train_sampler = torch.utils.data.distributed.DistributedSampler(dataset, rank=local_rank, shuffle=True)
-    train_loader = DataLoader(dataset, para['batch_size'], sampler=train_sampler, num_workers=8,
-                            worker_init_fn=worker_init_fn, drop_last=True, pin_memory=True)
-    return train_sampler, train_loader
+def construct_loader(dataset, batch_size=para['batch_size']):
+    # train_sampler = torch.utils.data.distributed.DistributedSampler(dataset, rank=local_rank, shuffle=True)
+    # train_loader = DataLoader(dataset, para['batch_size'], sampler=train_sampler, num_workers=para['num_worker'],
+    train_loader = DataLoader(dataset, batch_size, num_workers=para['num_worker'],
+                                shuffle=True, drop_last=True, pin_memory=True)
+                            # worker_init_fn=worker_init_fn, drop_last=True, pin_memory=True)
+    # train_loader = FAIDataLoader(
+    #     dataset = dataset,
+    #     batch_size=batch_size,
+    #     num_workers=para['num_worker'],
+    #     pin_memory=True, 
+    #     shuffle=True, 
+    #     drop_last=True,
+    #     timeout=60,
+    # )
+    return train_loader
 
-def renew_vos_loader(max_skip):
-    # //5 because we only have annotation for every five frames
-    yv_dataset = VOSDataset(path.join(yv_root, 'JPEGImages'), 
-                        path.join(yv_root, 'Annotations'), max_skip//5, is_bl=False, subset=load_sub_yv())
-    davis_dataset = VOSDataset(path.join(davis_root, 'JPEGImages', '480p'), 
-                        path.join(davis_root, 'Annotations', '480p'), max_skip, is_bl=False, subset=load_sub_davis())
-    train_dataset = ConcatDataset([davis_dataset]*5 + [yv_dataset])
+def renew_vm108_loader(long_seq=True, nb_frame_only=False):
+    # size=512
+    size=para['size']
+    train_dataset = VideoMatteDataset(
+        '../dataset_sc/VideoMatting108',
+        '../dataset_sc/BG20k/BG-20k/train',
+        '../dataset_sc/VideoMatting108/BG_done',
+        size=size,
+        # seq_length=12 if long_seq else 5,
+        seq_length=12 if long_seq else 8,
+        seq_sampler=TrainFrameSampler() if nb_frame_only else TrainFrameSamplerAddFarFrame(),
+        transform=VideoMatteTrainAugmentation(size, get_bgr_pha=para['get_bgr_pha']),
+        is_VM108=True,
+        bg_num=1,
+        is_trimap=para['dataset_trimap'],
+        is_perturb_mask=para['perturb_mask'],
+        get_bgr_phas=para['get_bgr_pha']
+    )
+    print('VM108 dataset size: ', len(train_dataset))
 
-    print('YouTube dataset size: ', len(yv_dataset))
-    print('DAVIS dataset size: ', len(davis_dataset))
-    print('Concat dataset size: ', len(train_dataset))
-    print('Renewed with skip: ', max_skip)
+    # return construct_loader(train_dataset, batch_size=2 if long_seq else 2)
+    return construct_loader(train_dataset, batch_size=4 if long_seq else 4)
 
-    return construct_loader(train_dataset)
+def renew_d646_loader(long_seq=True, nb_frame_only=False):
+    # size=512
+    size=para['size']
+    train_dataset = ImageMatteDataset(
+        '../dataset_sc/Distinctions646/Train',
+        '../dataset_sc/BG20k/BG-20k/train',
+        '../dataset_sc/VideoMatting108/BG_done',
+        size=size,
+        # seq_length=6 if long_seq else 3,
+        seq_length=4 if long_seq else 4,
+        seq_sampler=TrainFrameSampler() if nb_frame_only else TrainFrameSamplerAddFarFrame(),
+        transform=ImageMatteAugmentation(size, get_bgr_pha=para['get_bgr_pha']),
+        bg_num=1,
+        is_trimap=para['dataset_trimap'],
+        get_bgr_phas=para['get_bgr_pha']
+    )
+    print('D646 dataset size: ', len(train_dataset))
 
-def renew_bl_loader(max_skip):
-    train_dataset = VOSDataset(path.join(bl_root, 'JPEGImages'), 
-                        path.join(bl_root, 'Annotations'), max_skip, is_bl=True)
+    # return construct_loader(train_dataset, batch_size=8 if long_seq else 4)
+    return construct_loader(train_dataset, batch_size=16 if long_seq else 10)
 
-    print('Blender dataset size: ', len(train_dataset))
-    print('Renewed with skip: ', max_skip)
+def renew_ytvis_loader(long_seq=True, nb_frame_only=False):
+    # size = max(256, para['size']//2)
+    size = para['size']
+    speed = [0.5, 1, 2]
+    train_dataset = YouTubeVISDataset(
+        '../dataset_sc/YoutubeVIS/train/JPEGImages',
+        '../dataset_sc/YoutubeVIS/train/instances.json',
+        size, 
+        12 if long_seq else 8,
+        TrainFrameSampler(speed) if nb_frame_only else TrainFrameSamplerAddFarFrame(speed),
+        YouTubeVISAugmentation(size),
+        is_trimap=para['dataset_trimap']
+    )
+    print('YTVis dataset size: ', len(train_dataset))
 
-    return construct_loader(train_dataset)
+    # return construct_loader(train_dataset, batch_size=12 if long_seq else 6)
+    return construct_loader(train_dataset, batch_size=12 if long_seq else 8)
 
 """
 Dataset related
 """
-
-"""
-These define the training schedule of the distance between frames
-We will switch to skip_values[i] once we pass the percentage specified by increase_skip_fraction[i]
-Effective for stage 1 and stage 2 only
-"""
-skip_values = [10, 15, 20, 25, 5]
-
-if para['stage'] == 0:
-    static_root = path.expanduser(para['static_root'])
-    fss_dataset = StaticTransformDataset(path.join(static_root, 'fss'), method=0)
-    duts_tr_dataset = StaticTransformDataset(path.join(static_root, 'DUTS-TR'), method=1)
-    duts_te_dataset = StaticTransformDataset(path.join(static_root, 'DUTS-TE'), method=1)
-    ecssd_dataset = StaticTransformDataset(path.join(static_root, 'ecssd'), method=1)
-
-    big_dataset = StaticTransformDataset(path.join(static_root, 'BIG_small'), method=1)
-    hrsod_dataset = StaticTransformDataset(path.join(static_root, 'HRSOD_small'), method=1)
-
-    # BIG and HRSOD have higher quality, use them more
-    train_dataset = ConcatDataset([fss_dataset, duts_tr_dataset, duts_te_dataset, ecssd_dataset]
-             + [big_dataset, hrsod_dataset]*5)
-    train_sampler, train_loader = construct_loader(train_dataset)
-
-    print('Static dataset size: ', len(train_dataset))
-elif para['stage'] == 1:
-    # BL is harder, so we use a longer annealing
-    increase_skip_fraction = [0.1, 0.2, 0.3, 0.4, 0.8, 1.0]
-    bl_root = path.join(path.expanduser(para['bl_root']))
-
-    train_sampler, train_loader = renew_bl_loader(5)
-    renew_loader = renew_bl_loader
-else:
-    increase_skip_fraction = [0.1, 0.2, 0.3, 0.4, 0.9, 1.0]
-    # VOS dataset, 480p is used for both datasets
-    yv_root = path.join(path.expanduser(para['yv_root']), 'train_480p')
-    davis_root = path.join(path.expanduser(para['davis_root']), '2017', 'trainval')
-
-    train_sampler, train_loader = renew_vos_loader(5)
-    renew_loader = renew_vos_loader
-
+print('Use longer sequence: ', para['long_seq'])
+d646_loader = renew_d646_loader(long_seq=para['long_seq'], nb_frame_only=para['nb_frame_only'])
+vm108_loader = renew_vm108_loader(long_seq=para['long_seq'], nb_frame_only=para['nb_frame_only'])
+train_loader = d646_loader
+    
+if total_iter < para['seg_stop']:
+    seg_loader = renew_ytvis_loader(long_seq=para['long_seq'], nb_frame_only=para['nb_frame_only'])
 
 """
 Determine current/max epoch
 """
-total_epoch = math.ceil(para['iterations']/len(train_loader))
-current_epoch = total_iter // len(train_loader)
-print('Number of training epochs (the last epoch might not complete): ', total_epoch)
-if para['stage'] != 0:
-    increase_skip_epoch = [round(total_epoch*f) for f in increase_skip_fraction]
-    # Skip will only change after an epoch, not in the middle
-    print('The skip value will increase approximately at the following epochs: ', increase_skip_epoch[:-1])
+iter_base = min(len(d646_loader), len(vm108_loader), para['seg_iter'])
+total_epoch = math.ceil(para['iterations']/iter_base)
+current_epoch = total_iter // max(len(d646_loader), len(vm108_loader), para['seg_iter'])
 
 """
 Starts training
 """
 # Need this to select random bases in different workers
-np.random.seed(np.random.randint(2**30-1) + local_rank*100)
+np.random.seed(np.random.randint(2**30-1))# + local_rank*100)
+if is_dataset_switched := (total_iter >= para['iter_switch_dataset']):
+    print('Switch to video dataset!')
+    train_loader = vm108_loader
+
+def get_extra_dict():
+    return {
+        'seg_iter': seg_iter,
+        'seg_count': seg_count,
+    }
+
 try:
     for e in range(current_epoch, total_epoch): 
+        torch.cuda.empty_cache()
+        time.sleep(2)
+        if total_iter >= para['iterations']:
+            break
         print('Epoch %d/%d' % (e, total_epoch))
-        if para['stage']!=0 and e!=total_epoch and e>=increase_skip_epoch[0]:
-            while e >= increase_skip_epoch[0]:
-                cur_skip = skip_values[0]
-                skip_values = skip_values[1:]
-                increase_skip_epoch = increase_skip_epoch[1:]
-            print('Increasing skip to: ', cur_skip)
-            train_sampler, train_loader = renew_loader(cur_skip)
-
-        # Crucial for randomness! 
-        train_sampler.set_epoch(e)
 
         # Train loop
         model.train()
-        for data in train_loader:
-            model.do_pass(data, total_iter)
-            total_iter += 1
+        if total_iter < para['seg_stop'] and ((seg_count == 0) or (seg_iter < para['seg_iter'])):
+            print("Segmentation Training: ")
+            for data in seg_loader:
+                model.do_pass(data, total_iter, segmentation_pass=True, ckpt_dict=get_extra_dict())
+                total_iter += 1
+                seg_iter += 1
+                
+                if total_iter >= para['iterations']:
+                    break
 
-            if total_iter >= para['iterations']:
-                break
+                if seg_iter >= para['seg_iter']:
+                    print("Segmentation Stop.")
+                    break
+            seg_count = 1
+        else:    
+            for data in train_loader:
+                model.do_pass(data, total_iter, ckpt_dict=get_extra_dict())
+                total_iter += 1
+                seg_count += 1
+
+                if total_iter >= para['iterations']:
+                    break
+
+                if not is_dataset_switched and total_iter >= para['iter_switch_dataset']:
+                    print('Switch to video dataset!')
+                    train_loader = vm108_loader
+                    is_dataset_switched = True
+                    break
+                
+                if seg_count >= para['seg_cd']:
+                    print("Segmentation CD finisih.")
+                    seg_count = 0
+                    seg_iter = 0
+                    break
+                    
 finally:
     if not para['debug'] and model.logger is not None and total_iter>5000:
-        model.save(total_iter)
-    # Clean up
-    distributed.destroy_process_group()
+        model.save(total_iter, ckpt_dict=get_extra_dict())

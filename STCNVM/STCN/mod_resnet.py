@@ -29,13 +29,12 @@ def load_weights_sequential(target, source_state, extra_chan=1):
                     tar_v = torch.cat([tar_v, pads], 1)
 
                 new_dict[k1] = tar_v
-            elif 'bias' not in k1:
-                print('Not OK', k1)
 
     target.load_state_dict(new_dict, strict=False)
 
 
 model_urls = {
+    'resnet18': 'https://download.pytorch.org/models/resnet18-5c106cde.pth',
     'resnet50': 'https://download.pytorch.org/models/resnet50-19c8e357.pth',
 }
 
@@ -153,6 +152,12 @@ class ResNet(nn.Module):
             layers.append(block(self.inplanes, planes, dilation=dilation))
 
         return nn.Sequential(*layers)
+
+def resnet18(pretrained=True, extra_chan=0):
+    model = ResNet(BasicBlock, [2, 2, 2, 2], extra_chan)
+    if pretrained:
+        load_weights_sequential(model, model_zoo.load_url(model_urls['resnet18']), extra_chan)
+    return model
 
 def resnet50(pretrained=True, extra_chan=0):
     model = ResNet(Bottleneck, [3, 4, 6, 3], extra_chan)
