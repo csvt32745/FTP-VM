@@ -1007,20 +1007,6 @@ class MattingFramework(nn.Module):
                 mode='bilinear', align_corners=False, recompute_scale_factor=False)
         return x
 
-class BGAM_Attn(MattingFramework):
-    def __init__(self):
-        ch_bottleneck = 128
-        ch_decode = [80, 40, 32, 16]
-        encoder = RGBEncoder('mobilenetv3_large_100', True, list(range(4)))
-        fuse = BGAwareFuse2(encoder.channels, ch_bottleneck)
-        decoder = RecurrentDecoder(fuse.ch_feats_out, ch_decode)
-        out = MattingOutput(ch_decode[-1], is_output_fg=False)
-
-        super().__init__(
-            encoder,
-            fuse, 
-            decoder, 
-            out)
 
 class FuseTemporal(nn.Module):
     def __init__(self, ch_feats, ch_out):
@@ -1159,22 +1145,6 @@ class MattingPropFramework(nn.Module):
             x = F.interpolate(x, scale_factor=scale_factor,
                 mode='bilinear', align_corners=False, recompute_scale_factor=False)
         return x
-
-class FrameVM(MattingPropFramework):
-    def __init__(self):
-        ch_bottleneck = 128
-        ch_decode = [80, 40, 32, 16]
-
-        encoder = DualEncoder('mobilenetv3_large_100', True, list(range(4)))
-        fuse = FuseTemporal(encoder.channels, ch_bottleneck)
-        decoder = RecurrentDecoder(fuse.ch_feats_out, ch_decode)
-        out = MattingOutput(ch_decode[-1], is_output_fg=False)
-
-        super().__init__(
-            encoder,
-            fuse, 
-            decoder, 
-            out)
 
 
 class GFM_VM(nn.Module):
@@ -1860,6 +1830,37 @@ class BGInpaintingGRU(nn.Module):
         bg = self.pred_bg(x)
         return x, h, torch.cat([bg, coarse_mask], dim=-3)
 
+class BGInpaintingAttn(nn.Module):
+    # TODO: Additional BG gru inpainting block 
+    # 1. coarse mask -> get BG feature
+    # 2. soft attn (last feat & cur feat)
+    # 3. spatial scaling (due to soft composition)
+    # 4. decode to BG
+    def __init__(self, ch_in: int):
+        super().__init__()
+        self.attn = SoftCrossAttention(ch_in, 16, head=1)
+        self.pred_feat_mask = nn.Sequential(
+            nn.Conv2d(ch_in, ch_in, 3, 1, 1),
+            nn.LeakyReLU(0.2, True),
+            nn.Conv2d(ch_in, ch_in+1, 1)
+        )
+        self.pred_bg = PredictBG(ch_in)
+        self.ch_in = ch_in
+
+    def forward(self, x, h=None):
+        if x.ndim == 5:
+            b, t = x.shape[:2]
+            f, mask = self.pred_feat_mask(x.flatten(0, 1)).split([self.ch_in, 1], dim=1)
+            f = ((1-torch.sigmoid(mask))*f).unflatten(0, (b, t))
+            mask = mask.unflatten(0, (b, t))
+        else:
+            f, mask = self.pred_feat_mask(x).split([self.ch_in, 1], dim=1)
+            f = (1-torch.sigmoid(mask))*f
+        
+
+
+        bg = self.pred_bg(x)
+        return x, h, torch.cat([bg, mask], dim=-3)
 
 class GFM_BGFuse8xVM(nn.Module):
     def __init__(self,

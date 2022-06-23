@@ -22,9 +22,7 @@ class ImageMatteDataset(Dataset):
                  seq_sampler,
                  transform: MotionAugmentation,
                  bg_num=1,
-                 is_trimap=False,
                  get_bgr_phas=False):
-        self.is_trimap = is_trimap
         self.get_bgr_phas = get_bgr_phas
         self.imagematte_dir = imagematte_dir
         self.imagematte_files = os.listdir(os.path.join(imagematte_dir, 'FG'))
@@ -85,31 +83,12 @@ class ImageMatteDataset(Dataset):
             'bg': torch.stack(bgr_clips, 0) if self.bg_num > 1 else bgr_clips[0],
             # 'rgb': fgrs*phas + bgrs*(1-phas),
             'gt': phas,  
+            'trimap': get_dilated_trimaps(phas, np.random.randint(2, self.size//24)*2+1, random_kernel=True),
         }
         if self.get_bgr_phas:
             data['bgr_pha'] = bgr_phas
-        if self.is_trimap:
-            data['trimap'] = get_dilated_trimaps(phas, np.random.randint(2, self.size//32)*2+1)
         
         return data
-        # if random.random() < 0.5:
-        #     bgrs = self._get_random_image_background()
-        # else:
-        #     bgrs = self._get_random_video_background()
-        
-        # fgrs, phas = self._get_imagematte(idx)
-        
-        # if self.transform is not None:
-        #     fgrs, phas, bgrs = self.transform(fgrs, phas, bgrs)
-        
-        # # return fgrs, phas, bgrs
-        # return {
-        #     'fg': fgrs,
-        #     'bg': bgrs,
-        #     # 'rgb': fgrs*phas + bgrs*(1-phas),
-        #     'gt': phas,
-        # }
-    
 
     @lru_cache(maxsize=128)
     def _read_fg_gt(self, name):

@@ -26,14 +26,10 @@ class VideoMatteDataset(Dataset):
                  is_VM108=True,
                  mode='train',
                  bg_num=1,
-                 is_trimap=False,
-                 is_perturb_mask=False,
                  get_bgr_phas=False):
         assert mode in ['train', 'test']
         self.bg_num = bg_num
         self.get_bgr_phas = get_bgr_phas
-        self.is_perturb_mask = is_perturb_mask
-        self.is_trimap = is_trimap
         # self.manager = Manager()
         self.background_image_dir = background_image_dir
         self.background_image_files = os.listdir(background_image_dir)
@@ -125,13 +121,10 @@ class VideoMatteDataset(Dataset):
             'bg': torch.stack(bgr_clips, 0) if self.bg_num > 1 else bgr_clips[0],
             # 'rgb': fgrs*phas + bgrs*(1-phas),
             'gt': phas,  
+            'trimap': get_dilated_trimaps(phas, np.random.randint(2, self.size//24)*2+1, random_kernel=True),
         }
         if self.get_bgr_phas:
             data['bgr_pha'] = bgr_phas
-        if self.is_trimap:
-            data['trimap'] = get_dilated_trimaps(phas, np.random.randint(2, self.size//32)*2+1)
-        if self.is_perturb_mask:
-            data['last_mask'] = get_perturb_masks(phas)
         
         return data
 

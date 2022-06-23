@@ -13,8 +13,6 @@ class HyperParameters():
         parser.add_argument('--benchmark', action='store_true')
         parser.add_argument('--num_worker', help='num_workers of dataloader', default=16, type=int)
         parser.add_argument('--nb_frame_only', help='neighbor frames only', action='store_true')
-        parser.add_argument('--dataset_trimap', help='compute trimap in dataset', action='store_true')
-        parser.add_argument('--perturb_mask', help='compute perturn mask in dataset', action='store_true')
         parser.add_argument('--get_bgr_pha', help='get pha of bgr by lastframe affine', action='store_true')
         parser.add_argument('--size', help='dataset img size', default=256, type=int)
 

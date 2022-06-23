@@ -15,18 +15,30 @@ def all_to_onehot(masks, labels):
 def _get_kernel(kernel_size):
     return cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
 
-def get_dilated_trimaps(phas, kernel_size):
+def get_dilated_trimaps(phas, kernel_size, eps=1e-3, random_kernel=False):
     trimaps = []
-    kernel = _get_kernel(kernel_size)
-    for pha in (phas[:, 0].numpy()*255).astype(np.uint8): # N, H, W
-        fg_and_unknown = np.array(np.not_equal(pha, 0).astype(np.float32))
-        fg = np.array(np.equal(pha, 255).astype(np.float32))
-        dilate = cv2.dilate(fg_and_unknown, kernel, iterations=1)
-        erode = cv2.erode(fg, kernel, iterations=1)
-        trimap = erode * 1 + (dilate-erode) * 0.5
+    kernel = _get_random_kernel(kernel_size, np.random.randint(1, 5)) if random_kernel else _get_kernel(kernel_size)
+    phas = phas[:, 0].clamp(0, 1).numpy() # N, H, W
+    fg_and_unknowns = (phas > eps).astype(np.uint8)
+    fgs = (phas > (1-eps)).astype(np.uint8)
+    for i in range(len(fgs)): # N, H, W
+        dilate = cv2.dilate(fg_and_unknowns[i], kernel, iterations=1).astype(np.float32)
+        erode = cv2.erode(fgs[i], kernel, iterations=1).astype(np.float32)
+        trimap = erode * 1. + (dilate-erode) * 0.5
         trimaps.append(trimap)
     return torch.from_numpy(np.stack(trimaps)).unsqueeze(1) # T, 1, H, W
 
+@lru_cache(128)
+def _get_random_kernel(size, choice):
+    # choice = np.random.randint(1, 5)
+    if choice == 1:
+        return cv2.getStructuringElement(cv2.MORPH_RECT, (size, size))
+    elif choice == 2:
+        return cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (size, size))
+    elif choice == 3:
+        return cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (size, size//2))
+    elif choice == 4:
+        return cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (size//2, size))
 
 def get_perturb_masks(phas):
     ret = []

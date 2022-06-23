@@ -114,8 +114,6 @@ def renew_vm108_loader(long_seq=True, nb_frame_only=False):
         transform=VideoMatteTrainAugmentation(size, get_bgr_pha=para['get_bgr_pha']),
         is_VM108=True,
         bg_num=1,
-        is_trimap=para['dataset_trimap'],
-        is_perturb_mask=para['perturb_mask'],
         get_bgr_phas=para['get_bgr_pha']
     )
     print('VM108 dataset size: ', len(train_dataset))
@@ -136,7 +134,6 @@ def renew_d646_loader(long_seq=True, nb_frame_only=False):
         seq_sampler=TrainFrameSampler() if nb_frame_only else TrainFrameSamplerAddFarFrame(),
         transform=ImageMatteAugmentation(size, get_bgr_pha=para['get_bgr_pha']),
         bg_num=1,
-        is_trimap=para['dataset_trimap'],
         get_bgr_phas=para['get_bgr_pha']
     )
     print('D646 dataset size: ', len(train_dataset))
@@ -155,7 +152,6 @@ def renew_ytvis_loader(long_seq=True, nb_frame_only=False):
         12 if long_seq else 8,
         TrainFrameSampler(speed) if nb_frame_only else TrainFrameSamplerAddFarFrame(speed),
         YouTubeVISAugmentation(size),
-        is_trimap=para['dataset_trimap']
     )
     print('YTVis dataset size: ', len(train_dataset))
 

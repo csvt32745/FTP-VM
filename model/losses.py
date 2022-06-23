@@ -162,7 +162,7 @@ class SegLossComputer:
         
         if (size:= logits.size(2)) == 3:
             # GFM
-            losses['seg_bce'] = self.gfm_loss(it, logits, data['trimap'])
+            losses['seg_bce'] = self.gfm_loss(it, logits, data['trimap_query'])
             losses['seg_tv'] = tv_loss(logits)
             # losses['total_loss'] = sum(losses.values())
             # return data, losses
@@ -241,16 +241,14 @@ class MatLossComputer:
         losses = {}
         
         if (bg_out:=get_extra_outs(data, 'extra_outs', [3, 4])) is not None:
-            # bg_pha = torch.cumsum(1-self.avg2d_bg(data['bgr_pha']), dim=0).clamp(0, 1)
-            # weight = bg_pha + self.avg2d_bg(gt_mask)*bg_pha
-            # losses['bg_l1'] = L1_mask(bg_out, self.avg2d_bg(data['bg'][:, 1:]), mask=weight)*0.05
-
-            # without weight
+            gt_mask_x4 = self.avg2d_bg(gt_mask)
             if bg_out.size(2) == 4:
                 bg_out, coarse_mask = bg_out.split([3, 1], dim=2)
-                losses['coarse_mask_l1'] = L1_mask(coarse_mask, self.avg2d_bg(gt_mask))*0.5
+                losses['coarse_mask_l1'] = L1_mask(coarse_mask, gt_mask_x4)*0.5
                 data['coarse_mask'] = coarse_mask
-            losses['bg_l1'] = L1_mask(bg_out, self.avg2d_bg(data['bg'][:, 1:]))*0.1
+            bg_pha = torch.cumsum(1-self.avg2d_bg(data['bgr_pha']), dim=0).clamp(0, 1)
+            weight = (1+gt_mask_x4[:, 1:])*bg_pha
+            losses['bg_l1'] = L1_mask(bg_out[:, 1:], self.avg2d_bg(data['bg'][:, 1:]), mask=weight)*0.05
             data['pred_bg'] = bg_out
 
         if 'collab' in data:

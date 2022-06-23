@@ -17,14 +17,15 @@ import mediapy as media
 
 class InferenceCore:
     def __init__(self, 
-        model:STCN_Full, dataset:VM108ValidationDataset, loader_iter, pad=16, last_data=None
+        model:STCN_Full, dataset:VM108ValidationDataset, loader_iter, pad=16, last_data=None,
+        # request_data=['mask',]
     ):
 
         self.model = model
         self.dataset = dataset
         self.loader_iter = loader_iter
         # self.batch_size = dataloader.batch_size
-        self.name, images, gts, fgs, bgs = self.request_data_from_loader(last_data)
+        self.name, images, gts, fgs, bgs, trimaps = self.request_data_from_loader(last_data)
         self.total_frames = dataset.get_num_frames(self.name)
 
         # True dimensions
@@ -37,10 +38,12 @@ class InferenceCore:
         gts = self.pad_imgs(gts)
         gt_fgs = self.pad_imgs(fgs)
         gt_bgs = self.pad_imgs(bgs)
+        trimaps = self.pad_imgs(trimaps)
         self.images = images # T, C, H, W
         self.gts = gts
         self.gt_fgs = gt_fgs
         self.gt_bgs = gt_bgs
+        self.trimaps = trimaps
         self.masks = None
         self.fgs = None
         self.bgs = None
@@ -49,8 +52,8 @@ class InferenceCore:
         nh, nw = images.shape[-2:]
         self.h, self.w = h, w
         self.nh, self.nw = nh, nw
-        self.kh = self.nh//16
-        self.kw = self.nw//16
+        self.kh = self.nh//pad
+        self.kw = self.nw//pad
 
         self.device = 'cuda'
 
@@ -69,7 +72,7 @@ class InferenceCore:
     def request_data_from_loader(self, last_data):
         # return vid_name, rgb, gt
         data = next(self.loader_iter) if last_data is None else last_data
-        return data['info']['name'][0], data['rgb'][0], data['gt'][0], data['fg'][0], data['bg'][0]
+        return data['info']['name'][0], data['rgb'][0], data['gt'][0], data['fg'][0], data['bg'][0], data['trimap'][0]
 
     def add_images_from_loader(self):
         # With PAD
@@ -86,8 +89,10 @@ class InferenceCore:
         gts = self.pad_imgs(data['gt'][0])
         fgs = self.pad_imgs(data['fg'][0])
         bgs = self.pad_imgs(data['bg'][0])
+        trimaps = self.pad_imgs(data['trimap'][0])
         self.images = torch.cat([self.images, rgbs])
         self.gts = torch.cat([self.gts, gts])
+        self.trimaps = torch.cat([self.trimaps, trimaps])
         self.gt_fgs = torch.cat([self.gt_fgs, fgs])
         self.gt_bgs = torch.cat([self.gt_bgs, bgs])
 
@@ -339,9 +344,6 @@ class InferenceCoreRecurrent(InferenceCore):
         if end_idx < 0:
             end_idx = self.total_frames
         
-        # skip the first frame which is mem mask
-        # this_range = self.get_frame_stamps(frame_idx+1, end_idx, self.clip_size)
-        # still output the frame with mem mask since there's output FG
         this_range = self.get_frame_stamps(frame_idx, end_idx, self.clip_size)
 
         # take GT if input mask is not given
@@ -349,15 +351,11 @@ class InferenceCoreRecurrent(InferenceCore):
                 self.add_images_from_loader()
         if mask_idx is None:
             mask_idx = frame_idx
-        mask = self.pad_imgs(mask) if mask is not None else self.gts[[mask_idx]]
+        # TODO: to dynamic bind
+        mask = self.pad_imgs(mask) if mask is not None else self.trimaps[[mask_idx]]
+        # mask = self.pad_imgs(mask) if mask is not None else self.gts[[mask_idx]]
+        # =====================
 
-        # input mask as result
-        # if self.masks is None:
-        #     self.masks = mask
-        # else:
-        #     self.masks = torch.cat([self.masks, mask], 0)
-
-        # mem_mask = torch.zeros_like(mask).unsqueeze(0).cuda() # 1, 1, 1, H, W
         mem_mask = mask.unsqueeze(0).cuda() # 1, 1, 1, H, W
         mem_rgb = self.images[mask_idx].unsqueeze(0).unsqueeze(0).cuda() # 1, 1, C, H, W
         frame_count = 0
@@ -375,7 +373,10 @@ class InferenceCoreRecurrent(InferenceCore):
             frame_count += (end-start)
             if frame_count >= self.memory_iter:
                 mem_rgb = self.images[end-1].unsqueeze(0).unsqueeze(0).cuda()
-                mem_mask = self.gts[end-1] if self.memory_gt else self.masks[end-1]
+                # TODO: to dynamic bind
+                mem_mask = self.trimaps[end-1]
+                # mem_mask = self.gts[end-1] if self.memory_gt else self.masks[end-1]
+                # =====================
                 mem_mask = mem_mask.unsqueeze(0).unsqueeze(0).cuda()
                 frame_count = 0
             self.cur_idx = end
@@ -454,7 +455,7 @@ class InferenceCoreRecurrentGFM(InferenceCoreRecurrent):
         self.save_bg = False
 
     def _forward(self, query_imgs, memory_img, memory_mask):
-        glance, focus, pha, self.gru_mems, bg = self.model.forward(query_imgs, memory_img, memory_mask, self.gru_mems)
+        glance, focus, pha, self.gru_mems, bg = self.model.forward(query_imgs, memory_img, memory_mask, *self.gru_mems)
         glance = self.seg_to_trimap(glance)
         self.save_bg = self.save_bg or (isinstance(bg, torch.Tensor) and (bg.size(2) in [3, 4]))
         if self.masks is None:

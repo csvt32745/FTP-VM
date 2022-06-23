@@ -53,14 +53,13 @@ class PropagationModel:
             'BGVM_attngru': lambda: BGVM(gru=AttnGRU, is_output_fg=False),
             'DualVM_attngru': lambda: DualMattingNetwork(gru=AttnGRU, is_output_fg=False),
             'FuseVM': lambda: FuseMattingNetwork(fuse_func=which_module),
-            'FrameVM': FrameVM,
             'GFMVM': GFM_VM,
             'GFMVM_Rec': GFM_VM_Rec,
             'GFM_FuseVM': lambda: GFM_FuseVM(fuse=which_module),
             'GFM_FuseVM_FocalGRU': lambda: GFM_FuseVM(fuse=which_module, gru=FocalGRU),
             'GFM_FuseVM_FocalGRU2': lambda: GFM_FuseVM(fuse=which_module, gru=FocalGRUFix),
             'GFM_FuseVM_AttnGRU': lambda: GFM_FuseVM(fuse=which_module, gru=AttnGRU),
-            'GFM_Fuse8xVM': GFM_Fuse8xVM,
+            'GFM_Fuse8xVM': lambda: GFM_Fuse8xVM(fuse=which_module),
             'GFM_BGFuse8xVM': GFM_BGFuse8xVM,
 
         }[which_model]().cuda()
@@ -130,9 +129,7 @@ class PropagationModel:
         return tran_mask*0.5 + fg_mask
 
     def far_seg_pass(self, data):
-        if (trimap := data.get('trimap', None)) is not None:
-            data['trimap'] = trimap
-
+        trimap = data['trimap']
         gt = data['gt']
         rgb = data['rgb']
 
@@ -142,7 +139,7 @@ class PropagationModel:
         gt_m, gt_q = gt.split([1, T-1], dim=1)
         
 
-        ret = self.PNet(rgb_q, rgb_m, gt_m, segmentation_pass=True)
+        ret = self.PNet(rgb_q, rgb_m, trimap[:, [0]], segmentation_pass=True)
         logits = ret[0]
         out = {
             'logits': logits
@@ -150,7 +147,6 @@ class PropagationModel:
 
         if len(ret) == 3:
             out['extra_outs'] = ret[2]
-
 
         if logits.size(1) == T:
             data['gt_query'] = gt
@@ -162,15 +158,13 @@ class PropagationModel:
         if logits.size(2) == 3:
             # GFM            
             out['mask'] = self.seg_to_trimap(logits)
-            data['trimap'] = trimap[:, 1:]
+            data['trimap_query'] = trimap[:, 1:]
         else:
             out['mask'] = torch.sigmoid(logits)
 
         return data, out
 
     def far_mat_pass(self, data):
-        if (trimap := data.get('trimap', None)) is not None:
-            data['trimap'] = trimap[:, 1:]
         if (bg := data['bg']).ndim == 6:
             # for fgr with multiple bgrs
             # fg.shape = B, T, C, H, W
@@ -184,29 +178,15 @@ class PropagationModel:
             fg = data['fg']
             gt = data['gt']
 
-
-    
+        trimap = data['trimap']
         rgb = data['rgb'] = fg*gt + bg*(1-gt)
         # B, T, C, H, W
-        # idx_mem = np.random.randint(rgb.size(1))
-        T = rgb.size(1)
-        # rgb_q, rgb_m = rgb.split([T-1, 1], dim=1)
-        # gt_q, gt_m = gt.split([T-1, 1], dim=1)
-        rgb_m, rgb_q = rgb.split([1, T-1], dim=1)
-        gt_m, gt_q = gt.split([1, T-1], dim=1)
-        # rgb_m = rgb[:, [-1]]
-        # gt_m = gt[:, [-1]]
-        # rgb_q = rgb
-        
+        # T = rgb.size(1)
+        # rgb_m, rgb_q = rgb.split([1, T-1], dim=1)
+        # gt_m, gt_q = gt.split([1, T-1], dim=1)
 
-        ret = self.PNet(rgb_q, rgb_m, gt_m, segmentation_pass=False)
+        ret = self.PNet(rgb, rgb[:, [0]], trimap[:, [0]], segmentation_pass=False)
         out = {}
-        if len(ret) == 4:
-            # TODO: only fit DualMattingNetwork
-            # [pha, fgr, rec, extra]
-            # FG is target too
-            data['fg_query'] = fg[:, 1:] 
-            out['pred_fg'] = ret[1]
         
         if (isinstance(ret[-1], list) and (ret[-1][0].size(2) == 1)) \
             or (isinstance(ret[-1], torch.Tensor) and (ret[-1].size(2) in [3, 4])):
@@ -216,17 +196,13 @@ class PropagationModel:
             # GFM [glance, focus, collab, rec, extra]
             data['glance'] = ret[0]
             data['focus'] = ret[1]
-            mask = data['collab'] = out['mask'] = ret[2]
+            data['collab'] = out['mask'] = ret[2]
         else:
-            mask = out['mask'] = ret[0]
+            out['mask'] = ret[0]
 
-        if mask.size(1) == rgb.size(1):
-            data['gt_query'] = gt
-            data['rgb_query'] = rgb
-            data['fg_query'] = fg
-        else:
-            data['gt_query'] = gt_q
-            data['rgb_query'] = rgb_q
+        data['gt_query'] = gt
+        data['rgb_query'] = rgb
+        # data['fg_query'] = fg
         return data, out
 
     @staticmethod
@@ -414,6 +390,4 @@ class PropagationModel:
     def test(self):
         self._is_train = False
         self._do_log = False
-        self.PNet.eval()
-        return self
-
+        self.PNet.e

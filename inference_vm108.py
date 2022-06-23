@@ -34,16 +34,16 @@ from evalutation.evaluate_lr import Evaluator
 # )
 
 # %%
-# vm108 = VM108ValidationDataset(frames_per_item=32, mode='val', is_subset=False)
-# dataset_name='vm108_subval_512x512'
-vm108 = VM108ValidationDatasetFixFG(
-    fg_list_path='/home/csvt32745/matte/dataset_mat/VideoMatting108/exp_fgrs.rxt',
-    bg_list_path='/home/csvt32745/matte/dataset_mat/VideoMatting108/exp_bgrs.rxt',
-    frames_per_item=8,
-    size=512
-)
-dataset_name='fix_fgr'
-loader = DataLoader(vm108, batch_size=1, num_workers=16, shuffle=False, pin_memory=True)
+vm108 = VM108ValidationDataset(frames_per_item=8, mode='val', is_subset=False)
+dataset_name='vm108_subval_512x512'
+# vm108 = VM108ValidationDatasetFixFG(
+#     fg_list_path='/home/csvt32745/matte/dataset_mat/VideoMatting108/exp_fgrs.rxt',
+#     bg_list_path='/home/csvt32745/matte/dataset_mat/VideoMatting108/exp_bgrs.rxt',
+#     frames_per_item=4,
+#     size=512
+# )
+# dataset_name='fix_fgr'
+loader = DataLoader(vm108, batch_size=1, num_workers=8, shuffle=False, pin_memory=True)
 # loader = FAIDataLoader(
 #         dataset = vm108,
 #         batch_size=1,
@@ -61,10 +61,10 @@ model_list = [
     # '/home/csvt32745/matte/MaskPropagation/saves/May21_00.36.27_STCN_with_seg/May21_00.36.27_STCN_with_seg_120000.pth'),
     # ('STCN_RecDecoder', STCN_RecDecoder, InferenceCoreMemoryRecurrent, '/home/csvt32745/matte/MaskPropagation/saves/May23_03.58.11_STCN_RecDecoder/May23_03.58.11_STCN_RecDecoder_120000.pth'),
     
-    ('DualVM_FG', lambda: DualMattingNetwork(is_output_fg=True), InferenceCoreRecurrent, 
-    '/home/csvt32745/matte/MaskPropagation/saves/Jun01_10.41.32_DualVM_FG_fixFgCor/Jun01_10.41.32_DualVM_FG_fixFgCor_100000.pth'),
-    ('DualVM', lambda: DualMattingNetwork(is_output_fg=False), InferenceCoreRecurrent, 
-    '/home/csvt32745/matte/MaskPropagation/saves/May22_05.36.30_DualVM/May22_05.36.30_DualVM_120000.pth'),
+    # ('DualVM_FG', lambda: DualMattingNetwork(is_output_fg=True), InferenceCoreRecurrent, 
+    # '/home/csvt32745/matte/MaskPropagation/saves/Jun01_10.41.32_DualVM_FG_fixFgCor/Jun01_10.41.32_DualVM_FG_fixFgCor_100000.pth'),
+    # ('DualVM', lambda: DualMattingNetwork(is_output_fg=False), InferenceCoreRecurrent, 
+    # '/home/csvt32745/matte/MaskPropagation/saves/May22_05.36.30_DualVM/May22_05.36.30_DualVM_120000.pth'),
     
     ('GFM_VM', GFM_VM, InferenceCoreRecurrentGFM, 
     '/home/csvt32745/matte/MaskPropagation/saves/Jun15_23.10.51_GFMVM/Jun15_23.10.51_GFMVM_120000.pth'),

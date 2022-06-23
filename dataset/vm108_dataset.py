@@ -15,6 +15,7 @@ from dataset.range_transform import im_normalization, im_mean
 # from dataset.mask_perturb import perturb_mask
 # from dataset.gen_scribble import get_scribble
 from dataset.reseed import reseed
+from dataset.util import get_dilated_trimaps
 
 class VM108ValidationDataset(Dataset):
     FG_FOLDER = 'FG_done'
@@ -22,9 +23,10 @@ class VM108ValidationDataset(Dataset):
     def __init__(self,
         root='../dataset_mat/VideoMatting108', 
         size=512, frames_per_item=0, 
-        mode='train', is_subset=False, video_list_path=None, video_list=None
+        mode='train', is_subset=False, video_list_path=None, video_list=None, trimap_width=25
     ):
         assert mode in ['train', 'val']
+        self.trimap_width = trimap_width
         self.root = root
         self.mode = mode
         self.size = size
@@ -153,6 +155,7 @@ class VM108ValidationDataset(Dataset):
             'fg': fgs,
             'bg': bgs,
             'gt': gts,
+            'trimap': get_dilated_trimaps(gts, self.trimap_width),
             'info': info
         }
         return data

@@ -16,8 +16,7 @@ from tqdm import tqdm
 from .util import get_dilated_trimaps, get_perturb_masks
 
 class YouTubeVISDataset(Dataset):
-    def __init__(self, videodir, annfile, size, seq_length, seq_sampler, transform=None, debug_data=None, is_trimap=False):
-        self.is_trimap = is_trimap
+    def __init__(self, videodir, annfile, size, seq_length, seq_sampler, transform=None, debug_data=None):
         self.videodir = videodir
         self.size = size
         self.seq_length = seq_length
@@ -91,10 +90,8 @@ class YouTubeVISDataset(Dataset):
         data = {
             'rgb': imgs,
             'gt': segs,
-            
+            'trimap': get_dilated_trimaps(segs, np.random.randint(2, self.size//24)*2+1, random_kernel=True),
         }
-        if self.is_trimap:
-            data['trimap'] = get_dilated_trimaps(segs, np.random.randint(2, 15)*2+1)
         return data
     
 
