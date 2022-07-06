@@ -109,7 +109,7 @@ def renew_vm108_loader(long_seq=True, nb_frame_only=False):
         '../dataset_sc/VideoMatting108/BG_done',
         size=size,
         # seq_length=12 if long_seq else 5,
-        seq_length=12 if long_seq else 8,
+        seq_length=6 if long_seq else 8,
         seq_sampler=TrainFrameSampler() if nb_frame_only else TrainFrameSamplerAddFarFrame(),
         transform=VideoMatteTrainAugmentation(size, get_bgr_pha=para['get_bgr_pha']),
         is_VM108=True,
@@ -139,24 +139,24 @@ def renew_d646_loader(long_seq=True, nb_frame_only=False):
     print('D646 dataset size: ', len(train_dataset))
 
     # return construct_loader(train_dataset, batch_size=8 if long_seq else 4)
-    return construct_loader(train_dataset, batch_size=16 if long_seq else 10)
+    return construct_loader(train_dataset, batch_size=6 if long_seq else 10)
 
 def renew_ytvis_loader(long_seq=True, nb_frame_only=False):
-    # size = max(256, para['size']//2)
-    size = para['size']
+    size = min(352, para['size'])
+    # size = para['size']
     speed = [0.5, 1, 2]
     train_dataset = YouTubeVISDataset(
         '../dataset_sc/YoutubeVIS/train/JPEGImages',
         '../dataset_sc/YoutubeVIS/train/instances.json',
         size, 
-        12 if long_seq else 8,
+        8 if long_seq else 8,
         TrainFrameSampler(speed) if nb_frame_only else TrainFrameSamplerAddFarFrame(speed),
         YouTubeVISAugmentation(size),
     )
     print('YTVis dataset size: ', len(train_dataset))
 
     # return construct_loader(train_dataset, batch_size=12 if long_seq else 6)
-    return construct_loader(train_dataset, batch_size=12 if long_seq else 8)
+    return construct_loader(train_dataset, batch_size=8 if long_seq else 8)
 
 """
 Dataset related

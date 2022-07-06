@@ -90,8 +90,10 @@ class YouTubeVISDataset(Dataset):
         data = {
             'rgb': imgs,
             'gt': segs,
-            'trimap': get_dilated_trimaps(segs, np.random.randint(2, self.size//24)*2+1, random_kernel=True),
+            'trimap': get_dilated_trimaps(segs, 17, random_kernel=True),
+            'mem_trimap': get_dilated_trimaps(segs[[0]], np.random.randint(1, self.size//16)*2+1, random_kernel=True)
         }
+        
         return data
     
 

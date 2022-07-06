@@ -1,15 +1,12 @@
 import os
-from os import path
-
 import torch
 from torch.utils.data.dataset import Dataset
 from torchvision import transforms
 from PIL import Image
 import numpy as np
-import cv2
 import json
-import random
 import itertools
+import glob
 
 from dataset.range_transform import im_normalization, im_mean
 # from dataset.mask_perturb import perturb_mask
@@ -29,7 +26,7 @@ class VM108ValidationDataset(Dataset):
         self.trimap_width = trimap_width
         self.root = root
         self.mode = mode
-        self.size = size
+        self.size = (size, size) if type(size) == int else size
         self.frames_per_item = frames_per_item
         self.is_subset = is_subset
         assert video_list is None or video_list_path is None, 'only one of them should be given'
@@ -45,7 +42,7 @@ class VM108ValidationDataset(Dataset):
         interp_mode = transforms.InterpolationMode.BILINEAR
 
         self.crop = transforms.Compose([
-            transforms.Resize((size, size), interpolation=interp_mode),
+            transforms.Resize(self.size, interpolation=interp_mode),
         ])
 
         # Final transform without randomness
@@ -78,12 +75,7 @@ class VM108ValidationDataset(Dataset):
             # if len(frames) < 3:
             #     continue
             self.num_frames_of_video[vid] = len(frames)
-            if self.frames_per_item > 0:
-                split_size = len(frames)//self.frames_per_item + (len(frames) % self.frames_per_item>0)
-                frames = [arr.tolist() for arr in np.array_split(frames, split_size)]
-            else:
-                frames = [frames]
-            # self.videos_num_chunks.append(len(frames))
+            frames = split_frames(frames, self.frames_per_item)
             self.idx_to_vid_and_chunk.extend(list(zip([vid]*len(frames), frames)))
             self.videos.append(vid)
 
@@ -91,7 +83,7 @@ class VM108ValidationDataset(Dataset):
         return self.num_frames_of_video[video]
 
     def read_fg_gt(self, name_fg):
-        fg_gt = np.array(Image.open(path.join(self.root, self.FG_FOLDER, name_fg)).copy().convert('RGBA'))
+        fg_gt = np.array(Image.open(os.path.join(self.root, self.FG_FOLDER, name_fg)).copy().convert('RGBA'))
         # fg = fg_gt[..., -2::-1] # [B, G, R, A] -> [R, G, B])
         fg = fg_gt[..., :3] # [R, G, B, A] -> [R, G, B])
         fg = Image.fromarray(fg).convert('RGB')
@@ -100,7 +92,7 @@ class VM108ValidationDataset(Dataset):
         return fg, gt
 
     def read_bg(self, name_bg):
-        path_bg = path.join(self.root, self.BG_FOLDER, name_bg)
+        path_bg = os.path.join(self.root, self.BG_FOLDER, name_bg)
         if not os.path.exists(path_bg):
             path_bg = os.path.splitext(path_bg)[0]+'.png'
         bg = Image.open(path_bg).convert('RGB')
@@ -120,9 +112,8 @@ class VM108ValidationDataset(Dataset):
         # frames = self.frames[video]
 
         # sample frames from a video
-        info['frames'] = [] # Appended with actual frames
+        # info['frames'] = [] # Appended with actual frames
 
-        sequence_seed = np.random.randint(2147483647)
         fgs = []
         bgs = []
         gts = []
@@ -130,16 +121,14 @@ class VM108ValidationDataset(Dataset):
             # img I/O
             fg, gt, bg = self.read_imgs(name)
 
-            reseed(sequence_seed)                
             fg = self.crop(fg)
-            reseed(sequence_seed)                
             bg = self.crop(bg)
-            reseed(sequence_seed)
             gt = self.crop(gt)
 
             fg = self.final_im_transform(fg)
             bg = self.final_im_transform(bg)
             gt = self.to_tensor(gt)
+
             fgs.append(fg)
             bgs.append(bg)
             gts.append(gt)
@@ -169,11 +158,12 @@ class VM108ValidationDatasetFixFG(VM108ValidationDataset):
         root='../dataset_mat/VideoMatting108', 
         fg_list_path='', bg_list_path='',
         size=512, frames_per_item=0,
+        trimap_width=25,
     ):
         self.fg_list_path = fg_list_path
         self.bg_list_path = bg_list_path
         
-        super().__init__(root, size, frames_per_item)
+        super().__init__(root, size, frames_per_item, trimap_width=trimap_width)
 
     def read_imgs(self, names):
         # names == [fg_name, bg_name]
@@ -198,19 +188,124 @@ class VM108ValidationDatasetFixFG(VM108ValidationDataset):
             vid_name = '%s-%s' % (fg_path.replace('-', '_'), bg_path.replace('-', '_'))
             vid_name = vid_name.replace('/', '_')
             
-            self.num_frames_of_video[vid_name] = len(fg_frames)
-            # make bg has the same length as fg
-            if (fg_len := len(fg_frames)) > (bg_len := len(bg_frames)):
-                bg_pad = list(bg_frames) # reflection padding
-                bg_pad.reverse()
-                bg_frames = ((bg_frames + bg_pad) * (fg_len//bg_len))
-            bg_frames = bg_frames[:fg_len]
-            assert (len_frames := len(fg_frames)) == len(bg_frames), f'FG: {len(fg_frames)}, BG: {len(bg_frames)}'
+            len_fg = len(fg_frames)
+            self.num_frames_of_video[vid_name] = len_fg
+
+            bg_frames = stretch_bg_frames(bg_frames, len_fg)
             frames = list(zip(fg_frames, bg_frames))
-            if self.frames_per_item > 0:
-                split_size = len_frames // self.frames_per_item + (len_frames % self.frames_per_item>0)
-                frames = [arr.tolist() for arr in np.array_split(frames, split_size)]
-            else:
-                frames = [frames]
-            self.idx_to_vid_and_chunk.extend(list(zip([vid_name]*len_frames, frames)))
+            frames = split_frames(frames, self.frames_per_item)
+            self.idx_to_vid_and_chunk.extend(list(zip([vid_name]*len(frames), frames)))
             self.videos.append(vid_name)
+
+
+class VM240KValidationDataset(Dataset):
+    def __init__(self, 
+        root='../dataset_mat/videomatte_motion_sd', 
+        size=-1, frames_per_item=0, trimap_width=25,
+    ):
+        super().__init__()
+        self.trimap_width = trimap_width
+        self.root = root
+        self.size = (size, size) if type(size) == int else size
+        self.frames_per_item = frames_per_item
+        self.prepare_frame_list()
+
+        self.dataset_length = len(self.idx_to_vid_and_chunk)
+        print('%d videos accepted in %s.' % (len(self.videos), self.root))
+
+        interp_mode = transforms.InterpolationMode.BILINEAR
+
+        if self.size[0] <= 0:
+            self.crop = lambda x: x # placeholder
+        else:
+            self.crop = transforms.Compose([
+                transforms.Resize(self.size, interpolation=interp_mode)
+            ])
+
+        self.final_im_transform = transforms.Compose([
+            transforms.ToTensor(),
+            # im_normalization,
+        ])
+
+        self.to_tensor = transforms.ToTensor()
+
+    def prepare_frame_list(self):
+        self.idx_to_vid_and_chunk = []
+        self.num_frames_of_video = {}
+        self.videos = sorted(os.listdir(self.root))
+
+        for vid in self.videos:
+            # vid/pha/0000.jpg -> 0000
+            frames = [os.path.splitext(f)[0] for f in sorted(os.listdir(os.path.join(self.root, vid, 'pha')))]
+            if len(frames) == 0:
+                print(f"{vid} doesn't have frames! ({len(frames)})")
+                continue
+            self.num_frames_of_video[vid] = len(frames)
+
+            frames = split_frames(frames, self.frames_per_item)
+            self.idx_to_vid_and_chunk.extend(list(zip([vid]*len(frames), frames)))
+            # (vid: str, frames: [...])
+
+    def __getitem__(self, idx):
+        # video = self.videos[idx]
+        video, frames = self.idx_to_vid_and_chunk[idx]
+        info = {}
+        info['name'] = video
+        # frames = self.frames[video]
+
+        # sample frames from a video
+        # info['frames'] = [] # Appended with actual frames
+
+        rgbs = []
+        gts = []
+        for name in frames:
+            # img I/O
+            rgb = Image.open(os.path.join(self.root, video, 'rgb', name+"_rgb.png")).copy().convert('RGB')
+            gt = Image.open(os.path.join(self.root, video, 'pha', name+".png")).copy().convert('L')
+
+            rgb = self.crop(rgb)
+            gt = self.crop(gt)
+
+            rgb = self.final_im_transform(rgb)
+            gt = self.to_tensor(gt)
+
+            rgbs.append(rgb)
+            gts.append(gt)
+
+        rgbs = torch.stack(rgbs, 0)
+        gts = torch.stack(gts, 0)
+
+        # print("vm108: ", full_img.shape, fg.shape, bg.shape, gt.shape)
+        data = {
+            'rgb': rgbs,
+            'gt': gts,
+            'trimap': get_dilated_trimaps(gts, self.trimap_width),
+            'info': info
+        }
+        return data
+
+    def __len__(self):
+        return self.dataset_length
+    
+    def get_num_frames(self, video):
+        return self.num_frames_of_video[video]
+
+def stretch_bg_frames(bg_frames, fg_len):
+    # make bg has the same length as fg
+    if fg_len > (bg_len := len(bg_frames)):
+        bg_pad = list(bg_frames) # reflection padding
+        bg_pad.reverse()
+        bg_frames = ((bg_frames + bg_pad) * (fg_len//bg_len))
+    bg_frames = bg_frames[:fg_len]
+    assert fg_len == len(bg_frames), f'FG: {fg_len}, BG: {len(bg_frames)}'
+    return bg_frames
+
+def split_frames(frames, frames_per_item):
+    # split frames into batches (items)
+    if frames_per_item > 0:
+        len_frames = len(frames)
+        split_size = len_frames // frames_per_item + (len_frames % frames_per_item>0)
+        frames = [arr.tolist() for arr in np.array_split(frames, split_size)]
+    else:
+        frames = [frames]
+    return frames

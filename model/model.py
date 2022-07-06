@@ -18,8 +18,7 @@ from torchvision.transforms.functional import center_crop
 from torchinfo import summary
 import einops
 
-from STCNVM.module import DeformableConvGRU, DeformableFrameAlign
-from STCNVM.model import *
+from model.which_model import get_model_by_string
 # from model.losses import LossComputer, iou_hooks_mo, iou_hooks_so
 from model.losses import MatLossComputer, SegLossComputer
 from util.log_integrator import Integrator
@@ -39,33 +38,8 @@ class PropagationModel:
         # self.PNet = PropagationNetwork(True).cuda()
         print("Using model: ", para['which_model'])
         # "which_model=which_module"
-        if len(model_names := para['which_model'].split('=')) > 1:
-            which_module = model_names[1]
-        which_model = model_names[0]
-        self.PNet = {
-            'STCN_VM': STCN_VM,
-            'STCN': STCN_Full,
-            'STCN_RecDecoder': STCN_RecDecoder,
-            'DualVM': lambda: DualMattingNetwork(is_output_fg=False),
-            'BGVM': BGVM,
-            'BGVM_reconly': BGVM_reconly,
-            'DualVM_fm': lambda: DualMattingNetwork(gru=FocalGRU, is_output_fg=False),
-            'BGVM_attngru': lambda: BGVM(gru=AttnGRU, is_output_fg=False),
-            'DualVM_attngru': lambda: DualMattingNetwork(gru=AttnGRU, is_output_fg=False),
-            'FuseVM': lambda: FuseMattingNetwork(fuse_func=which_module),
-            'GFMVM': GFM_VM,
-            'GFMVM_Rec': GFM_VM_Rec,
-            'GFM_FuseVM': lambda: GFM_FuseVM(fuse=which_module),
-            'GFM_FuseVM_FocalGRU': lambda: GFM_FuseVM(fuse=which_module, gru=FocalGRU),
-            'GFM_FuseVM_FocalGRU2': lambda: GFM_FuseVM(fuse=which_module, gru=FocalGRUFix),
-            'GFM_FuseVM_AttnGRU': lambda: GFM_FuseVM(fuse=which_module, gru=AttnGRU),
-            'GFM_Fuse8xVM': lambda: GFM_Fuse8xVM(fuse=which_module),
-            'GFM_BGFuse8xVM': GFM_BGFuse8xVM,
-
-        }[which_model]().cuda()
-        # self.PNet = STCN_VM().cuda()
-        # self.PNet = STCN_Full().cuda()
-        # self.PNet = STCN_RecDecoder().cuda()
+        self.PNet = get_model_by_string(para['which_model'])().cuda()
+        
         print("Net Parameters: ", summary(self.PNet, verbose=0).total_params)
         # Setup logger when local_rank=0
         self.logger = logger
@@ -139,14 +113,14 @@ class PropagationModel:
         gt_m, gt_q = gt.split([1, T-1], dim=1)
         
 
-        ret = self.PNet(rgb_q, rgb_m, trimap[:, [0]], segmentation_pass=True)
+        ret = self.PNet(rgb_q, rgb_m, data['mem_trimap'], segmentation_pass=True)
         logits = ret[0]
         out = {
             'logits': logits
         }
 
-        if len(ret) == 3:
-            out['extra_outs'] = ret[2]
+        if len(ret) >= 3:
+            out['extra_outs'] = ret[-1]
 
         if logits.size(1) == T:
             data['gt_query'] = gt
@@ -178,14 +152,14 @@ class PropagationModel:
             fg = data['fg']
             gt = data['gt']
 
-        trimap = data['trimap']
+        # trimap = data['trimap']
         rgb = data['rgb'] = fg*gt + bg*(1-gt)
         # B, T, C, H, W
         # T = rgb.size(1)
         # rgb_m, rgb_q = rgb.split([1, T-1], dim=1)
         # gt_m, gt_q = gt.split([1, T-1], dim=1)
 
-        ret = self.PNet(rgb, rgb[:, [0]], trimap[:, [0]], segmentation_pass=False)
+        ret = self.PNet(rgb, rgb[:, [0]], data['mem_trimap'], segmentation_pass=False)
         out = {}
         
         if (isinstance(ret[-1], list) and (ret[-1][0].size(2) == 1)) \
@@ -195,6 +169,7 @@ class PropagationModel:
         if len(ret) == 5:
             # GFM [glance, focus, collab, rec, extra]
             data['glance'] = ret[0]
+            out['glance_out'] = self.seg_to_trimap(ret[0])
             data['focus'] = ret[1]
             data['collab'] = out['mask'] = ret[2]
         else:

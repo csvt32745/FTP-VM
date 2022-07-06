@@ -91,7 +91,7 @@ class VideoMatteDataset(Dataset):
     def __getitem__(self, idx):
         bgr_clips = []
         for i in range(self.bg_num):
-            if random.random() < 0.5:
+            if random.random() < 0.2:
                 bgr_clips.append(self._get_random_image_background())
             else:
                 bgr_clips.append(self._get_random_video_background())
@@ -121,7 +121,8 @@ class VideoMatteDataset(Dataset):
             'bg': torch.stack(bgr_clips, 0) if self.bg_num > 1 else bgr_clips[0],
             # 'rgb': fgrs*phas + bgrs*(1-phas),
             'gt': phas,  
-            'trimap': get_dilated_trimaps(phas, np.random.randint(2, self.size//24)*2+1, random_kernel=True),
+            'trimap': get_dilated_trimaps(phas, 17, random_kernel=False),
+            'mem_trimap': get_dilated_trimaps(phas[[0]], np.random.randint(1, self.size//16)*2+1, random_kernel=True)
         }
         if self.get_bgr_phas:
             data['bgr_pha'] = bgr_phas
@@ -195,7 +196,8 @@ class VideoMatteTrainAugmentation(MotionAugmentation):
             prob_blur=0.02,
             prob_hflip=0.5,
             prob_pause=0.03,
-            get_bgr_pha=get_bgr_pha
+            get_bgr_pha=get_bgr_pha,
+            prob_pha_scale=0.1,
         )
 
 class VideoMatteValidAugmentation(MotionAugmentation):
@@ -211,4 +213,5 @@ class VideoMatteValidAugmentation(MotionAugmentation):
             prob_blur=0,
             prob_hflip=0,
             prob_pause=0,
+            prob_pha_scale=0,
         )

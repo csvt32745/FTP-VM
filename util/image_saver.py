@@ -116,10 +116,14 @@ def pool_pairs(images, size, so):
     is_coarse_mask = 'coarse_mask' in images
     is_out_mem = images['rgb'].size(1) == images['rgb_query'].size(1)
     is_trimap = ((logits := images.get('logits', None)) is None) or (logits.size(2) != 3)
+    is_gf = 'glance' in images
     for b_idx in range(min(2, b)):
         # for b_idx in range(b):
         if not is_out_mem:
             req_images['RGB'].append(im_transform(images['rgb'][b_idx, 0], size))
+            if is_gf:
+                req_images['Glance'].append(mask_transform(images['glance_out'][b_idx, 0], size))
+                req_images['Focus'].append(mask_transform(images['focus'][b_idx, 0], size))
             req_images['Mask'].append(np.zeros((size[1], size[0], 3)))
             gt_mask = images['gt'][b_idx, 0]
             req_images[GT_name].append(mask_transform(gt_mask, size))
@@ -133,13 +137,14 @@ def pool_pairs(images, size, so):
             if is_coarse_mask:
                 req_images['Coarse_Mask'].append(np.zeros((size[1], size[0], 3)))
             if is_trimap:
-                req_images['Trimap'].append(mask_transform(images['trimap'][b_idx, 0], size))
+                req_images['Trimap'].append(mask_transform(images['mem_trimap'][b_idx, 0], size))
+
         srange = range(min(4, s-1))
         for s_idx in srange:
             req_images['RGB'].append(im_transform(images['rgb_query'][b_idx, s_idx], size))
-            # if s_idx == 0:
-            #     req_images['Mask'].append(np.zeros((size[1], size[0], 3)))
-            # else:
+            if is_gf:
+                req_images['Glance'].append(mask_transform(images['glance_out'][b_idx, s_idx], size))
+                req_images['Focus'].append(mask_transform(images['focus'][b_idx, s_idx], size))
             req_images['Mask'].append(mask_transform(images['mask'][b_idx, s_idx], size))
             gt_mask = images['gt_query'][b_idx, s_idx]
             req_images[GT_name].append(mask_transform(gt_mask, size))

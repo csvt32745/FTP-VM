@@ -2,50 +2,24 @@ from functools import lru_cache
 from typing import Optional
 import torch
 from torch import Tensor
-import numpy as np
-import cv2
+import math
 from torch import nn
+from torch.nn import functional as F
 from torchvision.ops.deform_conv import DeformConv2d
-from einops import rearrange
 import kornia as K
+from einops import rearrange
 from functools import reduce
 
-from .STCN.network import *
-from .STCN.modules import *
+# from .STCN.network import *
+# from .STCN.modules import *
 
+from .basic_block import ResBlock
 from .recurrent_decoder import ConvGRU
+from . import cbam
 
-
-
-class FeatureFusion(nn.Module):
+class FeatureFusion2(nn.Module):
     def __init__(self, indim, outdim):
         super().__init__()
-
-        self.block1 = ResBlock(indim, outdim)
-        self.attention = cbam.CBAM(outdim)
-        self.block2 = ResBlock(outdim, outdim)
-
-    def forward_single_frame(self, x):
-        # x = torch.cat([x, f16], 1)
-        x = self.block1(x)
-        r = self.attention(x)
-        x = self.block2(x + r)
-        return x
-    
-    def forward_time_series(self, x):
-        B, T = x.shape[:2]
-        x = self.forward_single_frame(x.flatten(0, 1)).unflatten(0, (B, T))
-        return x
-    
-    def forward(self, x):
-        if x.ndim == 5:
-            return self.forward_time_series(x)
-        else:
-            return self.forward_single_frame(x)
-
-class FeatureFusion2(FeatureFusion):
-    def __init__(self, indim, outdim):
-        super().__init__(indim, outdim)
         self.attention = cbam.CBAM(indim)
         self.block2 = ResBlock(indim, outdim)
 
@@ -65,9 +39,10 @@ class FeatureFusion2(FeatureFusion):
         else:
             return self.forward_single_frame(x)
 
-class FeatureFusion3(FeatureFusion):
+
+class FeatureFusion(nn.Module):
     def __init__(self, indim, outdim):
-        super().__init__(indim, outdim)
+        super().__init__()
         self.block = ResBlock(indim, outdim)
         self.attention = cbam.CBAM(outdim)
 
@@ -86,6 +61,7 @@ class FeatureFusion3(FeatureFusion):
         else:
             return self.forward_single_frame(x)
 
+FeatureFusion3 = FeatureFusion
 
 class SingleDeformConv2d(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size=3, stride=1,
@@ -209,7 +185,7 @@ class ConvSelfAttention(nn.Module):
     def get_diag_id(length: int):
         return list(range(length))
 
-    def forward(self, x_query, x_key=None, extra_value=None):
+    def forward(self, x_query, x_key=None, x_value=None):
         
         b, t, c, h, w = x_query.shape
         if x_key is None:
@@ -218,9 +194,7 @@ class ConvSelfAttention(nn.Module):
 
         x_query = x_query.flatten(0, 1)
         x_key = x_key.flatten(0, 1)
-        x_value = x_key
-        if extra_value is not None:
-            x_value = torch.cat([x_value, extra_value.flatten(0, 1)], dim=1)
+        x_value = x_key if x_value is None else x_value.flatten(0, 1)
         
         v = self.conv_v(x_value) # ((b t), ...)
         v = self.unfold(v) # ((b t) P*P*c*m h'*w')
@@ -588,6 +562,34 @@ class AttnGRU(nn.Module):
         else:
             return self.forward_single_frame(x, h)
 
+class AttnGRU2(AttnGRU):
+    def __init__(self, 
+        channels: int, 
+        kernel_size: int = 3, 
+        padding: int = 1, 
+        hidden=16, 
+        patch_size=9, 
+        head=1):
+        super().__init__(channels, kernel_size, padding, hidden, patch_size, head)
+    
+    def forward_single_frame(self, x, h):
+        h = torch.tanh(self.attn(x, h))
+        r, z = self.ih(torch.cat([x, h], dim=1)).split(self.channels, dim=1)
+        c = self.hh(torch.cat([x, r * h], dim=1))
+        h = (1 - z) * h + z * c
+        return h, h
+
+class AttnGRU2_big(AttnGRU2):
+    def __init__(self, 
+        channels: int, 
+        kernel_size: int = 3, 
+        padding: int = 1, 
+        hidden=16, 
+        patch_size=15, 
+        head=1
+    ):
+        super().__init__(channels, kernel_size, padding, hidden, patch_size, head)
+
 class FocalGRU(ConvGRU):
     def __init__(self, channels: int, kernel_size: int = 3, padding: int = 1):
         super().__init__(channels, kernel_size, padding)
@@ -595,20 +597,7 @@ class FocalGRU(ConvGRU):
         self.focal = FocalModulation(channels, 5, 4)
         
     def forward_single_frame(self, x, h):
-        h = self.focal(h, x)
-        r, z = self.ih(torch.cat([x, h], dim=1)).split(self.channels, dim=1)
-        c = self.hh(torch.cat([x, r * h], dim=1))
-        h = (1 - z) * h + z * c
-        return h, h
-
-class FocalGRUFix(ConvGRU):
-    def __init__(self, channels: int, kernel_size: int = 3, padding: int = 1):
-        super().__init__(channels, kernel_size, padding)
-        
-        self.focal = FocalModulation(channels, 5, 4)
-        
-    def forward_single_frame(self, x, h):
-        h = (h+torch.tanh(self.focal(h, x)))*0.5
+        h = torch.tanh(self.focal(h, x))
         r, z = self.ih(torch.cat([x, h], dim=1)).split(self.channels, dim=1)
         c = self.hh(torch.cat([x, r * h], dim=1))
         h = (1 - z) * h + z * c
@@ -704,18 +693,47 @@ class SoftCrossAttention(nn.Module):
             x_value = x_key
         return self._forward(x_query, x_key, x_value)
 
-class GatedConv2d(nn.Module):
-    def __init__(self, ch_in, ch_out, kernel=1, stride=1, padding=0, act=nn.LeakyReLU(0.1, True)):
+
+class MemoryReader(nn.Module):
+    def __init__(self, affinity='dotproduct'):
         super().__init__()
-        self.conv = nn.Conv2d(ch_in, ch_out*2, kernel, stride, padding)
-        self.ch_out = ch_out
-        self.act = act
-    
-    def forward(self, x):
-        if x.ndim == 5:
-            b, t = x.shape[:2]
-            x, m = self.conv(x.flatten(0, 1)).split(self.ch_out, dim=1)
-            return (self.act(x)*torch.sigmoid(m)).unflatten(0, (b, t))
-            
-        x, m = self.conv(x).split(self.ch_out, dim=1)
-        return self.act(x)*torch.sigmoid(m)
+        self.get_affinity = {
+            'l1': self.affinity_l2,
+            'dotproduct': self.affinity_dotproduct,
+        }[affinity]
+ 
+    def affinity_l2(self, mk, qk):
+        # L2 distance
+        B, CK, T, H, W = mk.shape
+        mk = mk.flatten(start_dim=2)
+        qk = qk.flatten(start_dim=2)
+
+        # See supplementary material
+        a_sq = mk.pow(2).sum(1).unsqueeze(2)
+        ab = mk.transpose(1, 2) @ qk
+
+        affinity = (2*ab-a_sq) / math.sqrt(CK)   # B, THW, HW
+        
+        # softmax operation; aligned the evaluation style
+        maxes = torch.max(affinity, dim=1, keepdim=True)[0]
+        x_exp = torch.exp(affinity - maxes)
+        x_exp_sum = torch.sum(x_exp, dim=1, keepdim=True)
+        affinity = x_exp / x_exp_sum 
+
+        return affinity
+
+    def affinity_dotproduct(self, mk, qk):
+        # Dot product
+        B, CK, T, H, W = mk.shape
+        mk = mk.flatten(start_dim=2) # b, c, nm
+        qk = qk.flatten(start_dim=2) # b, c, nq
+        ab = mk.transpose(1, 2) @ qk # b, nm, nq
+        affinity = ab / math.sqrt(CK)
+        return F.softmax(affinity, dim=1)
+
+    def readout(self, affinity, mv):
+        B, CV, T, H, W = mv.shape
+        mv = mv.reshape(B, CV, -1) # b, ch_val, nm
+        val = torch.bmm(mv, affinity) # b, ch_val, nq
+        val = rearrange(val, 'b c (t h w) -> b t c h w', h=H, w=W)
+        return val

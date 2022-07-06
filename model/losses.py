@@ -2,14 +2,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
-from torchvision.ops.focal_loss import sigmoid_focal_loss
 from typing import Optional
 import numpy as np
 import kornia as K
 import einops
-
-from collections import defaultdict
-
+from functools import lru_cache
 from STCNVM.module import PRM
 
 
@@ -149,6 +146,7 @@ class SegLossComputer:
         self.bsce = BootstrappedCE()
         # self.ce = nn.CrossEntropyLoss()
         self.ce = FocalLoss()
+        # self.ce = FocalLoss(alpha=torch.FloatTensor([1, 3, 1])).cuda()
         self.avg2d = nn.AvgPool3d((1, 2, 2))
         self.avg2d_bg = nn.AvgPool3d((1, 4, 4))
         self.prm = PRM()
@@ -162,8 +160,12 @@ class SegLossComputer:
         
         if (size:= logits.size(2)) == 3:
             # GFM
-            losses['seg_bce'] = self.gfm_loss(it, logits, data['trimap_query'])
-            losses['seg_tv'] = tv_loss(logits)
+            label = get_label_from_trimap(data['trimap_query'])
+            losses['seg_bce'] = self.gfm_loss(it, logits, label)
+            prob = torch.sigmoid(logits)
+            # losses['seg_temp_con'] = seg_inconsistency_loss(prob, label)*10
+            # losses['seg_tv'] = tv_loss(prob)
+            losses['seg_tv'] = seg_3d_inconsistency_loss(prob, label)*10
             # losses['total_loss'] = sum(losses.values())
             # return data, losses
         elif size == 1:
@@ -182,22 +184,18 @@ class SegLossComputer:
         losses['total_loss'] = sum(losses.values())
         return data, losses
 
-    def gfm_loss(self, it, logits, mask):
+    def gfm_loss(self, it, logits, label):
         # return self.fce(logits, mask)
-        label = torch.zeros_like(mask, dtype=torch.long)
-        # (bg, tran, fg)
-        label[mask >= 1e-5] = 1 # tran
-        label[mask >= 1-1e-5] = 2 #
 
         # label = torch.zeros_like(mask, dtype=torch.long)
         # cond = mask > 0.5
         # label[cond] = 2 # fg
 
         # return self.bsce(logits.flatten(0, 1), label.flatten(0, 1)[:, 0], it)
-        return self.ce(logits.flatten(0, 1), label.flatten(0, 1)[:, 0])
+        return self.ce(logits.flatten(0, 1), label.flatten(0, 1))
 
-def tv_loss(logits):
-    prob = torch.sigmoid(logits) # B, T, C, H, W
+def tv_loss(prob):
+    # prob = torch.sigmoid(logits) # B, T, C, H, W
     loss_h = F.l1_loss(prob[:, :, :, :-1], prob[:, :, :, 1:])
     loss_w = F.l1_loss(prob[..., :-1], prob[..., 1:])
     # loss_t = F.l1_loss(prob[:, :-1], prob[:, 1:])
@@ -221,6 +219,7 @@ class MatLossComputer:
         self.lapla_loss = LapLoss(max_levels=4).cuda()
         # self.sce = nn.CrossEntropyLoss()
         self.ce = FocalLoss()
+        # self.ce = FocalLoss(alpha=torch.FloatTensor([1, 3, 1])).cuda()
         self.bsce = BootstrappedCE()
         self.spatial_grad = K.filters.SpatialGradient()
         self.avg2d = nn.AvgPool3d((1, 2, 2))
@@ -290,16 +289,17 @@ class MatLossComputer:
         loss = {}
         logits = data['glance']
         trimap = data['trimap']
-        label = torch.zeros_like(trimap, dtype=torch.long)
-        label[trimap >= 1e-5] = 1 # tran
-        label[trimap >= 1-1e-5] = 2 # fg
-        # loss['seg_bce'] = self.bsce(logits.flatten(0, 1), label.flatten(0, 1)[:, 0], it)
-        loss['seg_bce'] = self.ce(logits.flatten(0, 1), label.flatten(0, 1)[:, 0])
+        label = get_label_from_trimap(trimap)
+        # loss['seg_bce'] = self.bsce(logits.flatten(0, 1), label.flatten(0, 1), it)
+        loss['seg_bce'] = self.ce(logits.flatten(0, 1), label.flatten(0, 1))
         # loss['seg_bce'], target = self.fce(logits, trimap, True) # return target = True
-        loss['seg_tv'] = tv_loss(logits)
+        prob = torch.sigmoid(logits)
+        # loss['seg_tv'] = tv_loss(prob)
+        # loss['seg_temp_con'] = seg_inconsistency_loss(prob, label)*10
+        loss['seg_tv'] = seg_3d_inconsistency_loss(prob, label)*10
 
         # for k, v in self.alpha_loss(data['focus'], gt_mask, mask=target[:, :, [1]]).items():
-        for k, v in self.alpha_loss(data['focus'], gt_mask, mask=(trimap==1)).items():
+        for k, v in self.alpha_loss(data['focus'], gt_mask, mask=(label==1).unsqueeze(2)).items():
             loss['focus_'+k] = v
         for k, v in self.alpha_loss(data['collab'], gt_mask).items():
             loss['collab_'+k] = v
@@ -475,3 +475,121 @@ class LapLoss(torch.nn.Module):
             return loss / _safe
         return loss
 
+def get_label_from_trimap(mask):
+    label = torch.zeros_like(mask, dtype=torch.long)
+    # (bg, tran, fg)
+    label[mask >= 1e-5] = 1 # tran
+    label[mask >= 1-1e-5] = 2 #
+    return label.squeeze(2)
+
+@lru_cache(maxsize=1)
+def get_inconsis_kernel():
+    kernel = torch.ones((3, 3), device='cuda')
+    kernel[0, 0] = 0
+    kernel[0, -1] = 0
+    kernel[-1, 0] = 0
+    kernel[-1, -1] = 0
+    return kernel
+
+def seg_inconsistency_loss(output, target, consistency_function='abs_diff_true'):
+    # https://github.com/mrebol/f2f-consistent-semantic-segmentation/blob/master/model/loss.py#L53
+        
+    output = output.transpose(0, 1) # t, b, ...
+    target = target.transpose(0, 1) # t, b, ...
+    
+    pred = torch.argmax(output, dim=2).to(dtype=target.dtype)
+    target_select = target.unsqueeze(2)
+
+    gt1 = target[:-1]
+    gt2 = target[1:]
+        
+    if consistency_function == 'argmax_pred':
+        pred1 = pred[:-1]
+        pred2 = pred[1:]
+        diff_pred_valid = (pred1 != pred2).to(output.dtype)
+    elif consistency_function == 'abs_diff':
+        diff_pred_valid = (torch.abs(output[:-1] - output[1:])).sum(dim=2)
+    elif consistency_function == 'sq_diff':
+        diff_pred_valid = (torch.pow(output[:-1] - output[1:], 2)).sum(dim=2)
+    elif consistency_function == 'abs_diff_true':
+        pred1 = pred[:-1]
+        pred2 = pred[1:]
+        right_pred_mask = (pred1 == gt1) | (pred2 == gt2)
+        diff_pred = torch.abs(output[:-1] - output[1:])
+        diff_pred_true = torch.gather(diff_pred, dim=2, index=target_select[:-1]).squeeze(dim=2)
+        diff_pred_valid = diff_pred_true * (right_pred_mask).to(dtype=output.dtype)
+    elif consistency_function == 'sq_diff_true':
+        pred1 = pred[:-1]
+        pred2 = pred[1:]
+        right_pred_mask = (pred1 == gt1) | (pred2 == gt2)
+        diff_pred = torch.pow(output[:-1] - output[1:], 2)
+        diff_pred_true = torch.gather(diff_pred, dim=2, index=target_select[:-1]).squeeze(dim=2)
+        diff_pred_valid = diff_pred_true * (right_pred_mask).to(dtype=output.dtype)
+    elif consistency_function == 'sq_diff_true_XOR':
+        pred1 = pred[:-1]
+        pred2 = pred[1:]
+        right_pred_mask = (pred1 == gt1) ^ (pred2 == gt2)
+        diff_pred = torch.pow(output[:-1] - output[1:], 2)
+        diff_pred_true = torch.gather(diff_pred, dim=2, index=target_select[:-1]).squeeze(dim=2)
+        diff_pred_valid = diff_pred_true * (right_pred_mask).to(dtype=output.dtype)
+    elif consistency_function == 'abs_diff_th20':
+        output1 = output[:-1]
+        output2 = output[1:]
+        th_mask = (output1 > 0.2) & (output2 > 0.2)
+        diff_pred_valid = (torch.abs((output1 - output2) * th_mask.to(dtype=output.dtype))).sum(
+            dim=2)
+    
+    diff_gt_valid = (gt1 != gt2)  # torch.uint8
+    kernel = get_inconsis_kernel()
+    diff_gt_valid_dil = K.morphology.dilation(diff_gt_valid.float(), kernel=kernel, border_value=0)
+    diff_gt_valid_dil = K.morphology.dilation(diff_gt_valid_dil, kernel=kernel, border_value=0)<1e-5
+    inconsistencies = diff_pred_valid * (diff_gt_valid_dil)
+    return inconsistencies.mean()
+
+
+def seg_3d_inconsistency_loss(output, target):
+    # output = output.transpose(0, 1) # t, b, ...
+    # target = target.transpose(0, 1) # t, b, ...
+    
+    kernel = get_inconsis_kernel()
+    def dilation(mask):
+        ret = K.morphology.dilation(mask.float(), kernel=kernel, border_value=0)
+        return K.morphology.dilation(ret, kernel=kernel, border_value=0)<1e-5
+
+    def weighted_avg(x, m):
+        return (x*m).sum() / (m.sum() + 1e-5)
+
+    pred = torch.argmax(output, dim=2).to(dtype=target.dtype)
+    target_select = target.unsqueeze(2)
+    right_pred = (target == pred)
+
+
+    # T
+    right_pred_mask = right_pred[:, :-1] | right_pred[:, 1:]
+    diff_pred = torch.abs(output[:, :-1] - output[:, 1:]) 
+    diff_pred_true = torch.gather(diff_pred, dim=2, index=target_select[:, :-1]).squeeze(dim=2)
+    mask = right_pred_mask.to(dtype=output.dtype) * dilation(target[:, :-1] != target[:, 1:])
+    # t = diff_pred_true * mask
+    t = weighted_avg(diff_pred_true, mask)
+
+    # W
+    right_pred_mask = right_pred[..., :, :-1] | right_pred[..., :, 1:]
+    diff_pred = torch.abs(output[..., :, :-1] - output[..., :, 1:]) 
+    diff_pred_true = torch.gather(diff_pred, dim=2, index=target_select[..., :, :-1]).squeeze(dim=2)
+    mask = right_pred_mask.to(dtype=output.dtype) * dilation(target[..., :, :-1] != target[..., :, 1:])
+    # w = diff_pred_true * mask
+    w = weighted_avg(diff_pred_true, mask)
+
+
+    # H
+    right_pred_mask = right_pred[..., :-1] | right_pred[..., 1:]
+    diff_pred = torch.abs(output[..., :-1] - output[..., 1:]) 
+    diff_pred_true = torch.gather(diff_pred, dim=2, index=target_select[..., :-1]).squeeze(dim=2)
+    # print(diff_pred_true.shape, right_pred_mask.shape, target[..., :-1].shape)
+    mask = right_pred_mask.to(dtype=output.dtype) * dilation(target[..., :-1] != target[..., 1:])
+    # h = diff_pred_true * mask
+    h = weighted_avg(diff_pred_true, mask)
+
+    # print(t.shape, h.shape, w.shape)
+    # return (t.mean()+h.mean()+w.mean())
+    return t+h+w

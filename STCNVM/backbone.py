@@ -78,6 +78,7 @@ class DualEncoder(nn.Module):
         # ..., C, H, W
         return self.backbone_q(qimg), self.backbone_m(torch.cat([mimg, mmask], dim=-3))
 
+
 if __name__ == '__main__':
     q = torch.rand((2, 3, 3, 128, 128))
     m = torch.rand((2, 1, 3, 128, 128))

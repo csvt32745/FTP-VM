@@ -19,7 +19,8 @@ class MotionAugmentation:
                  prob_pause,
                  static_affine=True,
                  aspect_ratio_range=(0.9, 1.1),
-                 get_bgr_pha=False):
+                 get_bgr_pha=False,
+                 prob_pha_scale=0.1):
         self.size = size
         self.prob_fgr_affine = prob_fgr_affine
         self.prob_bgr_affine = prob_bgr_affine
@@ -34,6 +35,7 @@ class MotionAugmentation:
         self.aspect_ratio_range = aspect_ratio_range
         self.resize = transforms.Resize(self.size, interpolation=F.InterpolationMode.BILINEAR)
         self.get_bgr_pha = get_bgr_pha
+        self.prob_pha_scale = prob_pha_scale
 
     def __call__(self, fgrs, phas, bgrs):
         # Move affine to final
@@ -49,6 +51,10 @@ class MotionAugmentation:
         phas = F.resized_crop(phas, *params, (self.size, self.size), interpolation=F.InterpolationMode.BILINEAR)
         params = transforms.RandomResizedCrop.get_params(bgrs, scale=(1, 1), ratio=self.aspect_ratio_range)
         bgrs = F.resized_crop(bgrs, *params, (self.size, self.size), interpolation=F.InterpolationMode.BILINEAR)
+
+        # pha scale
+        if random.random() < self.prob_pha_scale:
+            phas = self._motion_pha_scale(phas)
 
         # Horizontal flip
         if random.random() < self.prob_hflip:
@@ -252,6 +258,21 @@ class MotionAugmentation:
                 img[t] = F.adjust_hue(img[t], min(0.5, max(-0.5, lerp(hueA, hueB, percentage) * 0.1)))
         return imgs if len(imgs) > 1 else imgs[0]
     
+    def _motion_pha_scale(self, *imgs):
+        scaleA = random.random()
+        scaleB = random.random()
+        while abs(scaleA-scaleB) < 0.2:
+            scaleB = random.random()
+
+        T = len(imgs[0])
+        easing = random_easing_fn()
+        for t in range(T):
+            percentage = easing(t / (T - 1))
+            scale = lerp(scaleA, scaleB, percentage)
+            for img in imgs:
+                img[t] = img[t]*scale
+        return imgs if len(imgs) > 1 else imgs[0]
+
     def _motion_blur(self, *imgs):
         blurA = random.random() * 10
         blurB = random.random() * 10

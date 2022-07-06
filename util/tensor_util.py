@@ -32,7 +32,7 @@ def pad_divide_by(in_img, d):
 
 def unpad(img, pad):
     if pad[2]+pad[3] > 0:
-        img = img[:,:,pad[2]:-pad[3],:]
+        img = img[... ,pad[2]:-pad[3],:]
     if pad[0]+pad[1] > 0:
-        img = img[:,:,:,pad[0]:-pad[1]]
+        img = img[... ,pad[0]:-pad[1]]
     return img
