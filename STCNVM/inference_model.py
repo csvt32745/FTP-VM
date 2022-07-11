@@ -28,7 +28,6 @@ class InferenceCore:
         self.total_frames = dataset.get_num_frames(self.name)
 
         # True dimensions
-        t = images.shape[1]
         h, w = images.shape[-2:]
 
         # Pad each side to multiple of 16
@@ -38,14 +37,17 @@ class InferenceCore:
         gt_fgs = self.pad_imgs(fgs) if fgs is not None else None
         gt_bgs = self.pad_imgs(bgs) if bgs is not None else None
         trimaps = self.pad_imgs(trimaps) if trimaps is not None else None
-        self.images = images # T, C, H, W
-        self.gts = gts
-        self.gt_fgs = gt_fgs
-        self.gt_bgs = gt_bgs
-        self.trimaps = trimaps
+        
+        self.images = self.tensor_aloc(images) # T, C, H, W
+        self.gts = self.tensor_aloc(gts)
+        self.gt_fgs = self.tensor_aloc(gt_fgs)
+        self.gt_bgs = self.tensor_aloc(gt_bgs)
+        self.trimaps = self.tensor_aloc(trimaps)
         self.masks = None
         self.fgs = None
         self.bgs = None
+        self.current_t = images.size(0)
+        self.current_out_t = 0
         
         # Padded dimensions
         nh, nw = images.shape[-2:]
@@ -61,6 +63,21 @@ class InferenceCore:
 
         self.save_start_idx = 0
         print('Process video %s with %d frames' % (self.name.replace('/', '_'), self.total_frames))
+
+    def tensor_aloc(self, tensor: torch.Tensor, start=0):
+        if tensor is None:
+            return None
+        shape = list(tensor.shape)
+        shape[0] = self.total_frames
+        return self.tensor_cat(torch.zeros(shape, dtype=tensor.dtype, device=tensor.device), tensor, start)
+
+    def tensor_cat(self, tensor: torch.Tensor, target: torch.Tensor, start=0):
+        if target is None:
+            return None
+        if tensor is None:
+            return self.tensor_aloc(target, start)
+        tensor[start:start+target.size(0)] = target
+        return tensor
 
     def pad_imgs(self, imgs):
         return pad_divide_by(imgs, self.pad_size)[0]
@@ -91,12 +108,12 @@ class InferenceCore:
         fgs = data.get('fg', [None])[0]
         bgs = data.get('bg', [None])[0]
         trimaps = data.get('trimap', [None])[0]
-
-        self.images = torch.cat([self.images, self.pad_imgs(rgbs)])
-        self.gts = torch.cat([self.gts, self.pad_imgs(gts)])
-        if trimaps is not None: self.trimaps = torch.cat([self.trimaps, self.pad_imgs(trimaps)])
-        if fgs is not None: self.gt_fgs = torch.cat([self.gt_fgs, self.pad_imgs(fgs)])
-        if bgs is not None: self.gt_bgs = torch.cat([self.gt_bgs, self.pad_imgs(bgs)])
+        self.images = self.tensor_cat(self.images, self.pad_imgs(rgbs), self.current_t)
+        self.gts = self.tensor_cat(self.gts, self.pad_imgs(gts), self.current_t)
+        if trimaps is not None: self.trimaps = self.tensor_cat(self.trimaps, self.pad_imgs(trimaps), self.current_t)
+        if fgs is not None: self.gt_fgs = self.tensor_cat(self.gt_fgs, self.pad_imgs(fgs), self.current_t)
+        if bgs is not None: self.gt_bgs = self.tensor_cat(self.gt_bgs, self.pad_imgs(bgs), self.current_t)
+        self.current_t += gts.size(0)
 
     @staticmethod
     def get_frame_stamps(start, end, step):
@@ -115,13 +132,13 @@ class InferenceCore:
         # path = os.path.join(path, vm108.mode)
         print(f"Save video: {path}, {name} ")
         # T, 3, H, W
-        T = self.masks.size(0)
-        masks = torch.repeat_interleave(self.masks, 3, dim=1)
+        T = self.current_out_t
+        masks = torch.repeat_interleave(self.masks[:T], 3, dim=1)
         gts = torch.repeat_interleave(self.gts[:T], 3, dim=1)
         vid_arr = [self.unpad_downsample(i) for i in [self.images[:T], masks, gts]]
         vid = torch.cat(vid_arr, axis=3).permute(0, 2, 3, 1) # T, H, 3W, 3
         if self.bgs is not None:
-            bgs = F.interpolate(self.bgs, masks.shape[-2:], mode='bilinear')
+            bgs = F.interpolate(self.bgs[:T], masks.shape[-2:], mode='bilinear')
             gt_bgs = self.gt_bgs[:T]
             blank = torch.zeros_like(bgs)
             vid_arr = [self.unpad_downsample(i) for i in [blank, bgs, gt_bgs]]
@@ -154,7 +171,7 @@ class InferenceCore:
         pha_path = os.path.join(path, name, 'pha')
         os.makedirs(pha_path, exist_ok=True)
         masks = self.unpad_imgs(self.masks[:, 0]).numpy() # T, H, W
-        for i in range(masks.shape[0]):
+        for i in range(self.current_out_t):
             media.write_image(os.path.join(pha_path, f'{i:04d}.png'), masks[i])
             
         return
@@ -174,13 +191,20 @@ class InferenceCore:
         print(f"Save gt: {path}, {name} ")
         # save masks
 
-        pha_path = os.path.join(path, name, 'pha')
-        if os.path.isdir(pha_path):
+        
+        tri_path = os.path.join(path, name, 'trimap')
+        if os.path.isdir(tri_path):
             return
+        os.makedirs(tri_path, exist_ok=True)
+        tris = self.unpad_imgs(self.trimaps[:, 0]).numpy()
+        for i in range(self.current_t):
+            media.write_image(os.path.join(tri_path, f'{i:04d}.png'), tris[i])
+
+        pha_path = os.path.join(path, name, 'pha')
 
         os.makedirs(pha_path, exist_ok=True)
         gts = self.unpad_imgs(self.gts[:, 0]).numpy() # T, H, W
-        for i in range(gts.shape[0]):
+        for i in range(self.current_t):
             media.write_image(os.path.join(pha_path, f'{i:04d}.png'), gts[i])
 
         # save fgs
@@ -189,14 +213,16 @@ class InferenceCore:
             fgr_path = os.path.join(path, name, 'fgr')  
             os.makedirs(fgr_path, exist_ok=True)
             fgrs = self.unpad_imgs(self.gt_fgs).permute(0, 2, 3, 1).numpy() # T, H, W, 3
-            for i in trange(fgrs.shape[0]):
+            for i in trange(self.current_t):
                 media.write_image(os.path.join(fgr_path, f'{i:04d}.png'), fgrs[i])
 
     def clear(self):
         del self.gts
         del self.gt_fgs
+        del self.gt_bgs
         del self.images
         del self.fgs
+        del self.bgs
         del self.masks
         del self.trimaps
 
@@ -248,8 +274,8 @@ class InferenceCoreSTCN(InferenceCore):
             query_feats = self.encode_key(rgb)
             out_mask = self.decode_with_query(*query_feats)
 
-            self.masks = torch.cat([self.masks, out_mask[0].cpu()], 0)
-            self.cur_idx = end
+            self.masks = self.tensor_cat(self.masks, out_mask[0].cpu(), self.current_out_t)
+            self.current_out_t = end
             if start != final_idx: # and start % self.mem_every == 0:
                 prev_key, prev_value = self.encode_value(*query_feats, out_mask, idx=0)
                 self.mem_bank.add_memory(prev_key, prev_value)
@@ -264,10 +290,7 @@ class InferenceCoreSTCN(InferenceCore):
         
         # take GT if input mask is not given
         mask = self.pad_imgs(mask) if mask is not None else self.gts[[frame_idx]]
-        if self.masks == None:
-            self.masks = mask
-        else:
-            self.masks = torch.cat([self.masks, mask], 0)
+        self.masks = self.tensor_cat([self.masks, mask], self.current_out_t)
 
         mask = mask.unsqueeze(0).cuda() # 1, 1, 1, H, W
         # KV pair for the interacting frame
@@ -368,11 +391,11 @@ class InferenceCoreRecurrent(InferenceCore):
         this_range = self.get_frame_stamps(frame_idx, end_idx, self.clip_size)
 
         # take GT if input mask is not given
-        while self.images.size(0) <= frame_idx:
+        while self.current_t <= frame_idx:
                 self.add_images_from_loader()
         if mask_idx is None:
             mask_idx = frame_idx
-        # TODO: to dynamic bind
+
         mask = self.pad_imgs(mask) if mask is not None else self.get_memomry_mask(mask_idx).unsqueeze(0)
         # =====================
 
@@ -383,9 +406,10 @@ class InferenceCoreRecurrent(InferenceCore):
         # for i in tqdm(range(10)):
         for i in tqdm(range(len(this_range)-1)):
             start, end = this_range[i:i+2]
-            while self.images.size(0) < end:
+            while self.current_t < end:
                 self.add_images_from_loader()
             rgb = self.images[start:end].unsqueeze(0).cuda() # 1 T 3 H W
+
             time_start = time()
             out = self.forward(rgb, mem_rgb, mem_mask)
             total_time += time()-time_start
@@ -396,7 +420,7 @@ class InferenceCoreRecurrent(InferenceCore):
                 mem_mask = self.get_memomry_mask(end-1)
                 mem_mask = mem_mask.unsqueeze(0).unsqueeze(0).cuda()
                 frame_count = 0
-            self.cur_idx = end
+            self.current_out_t = end
             
             # if end >= 60:
             #     break
@@ -405,72 +429,6 @@ class InferenceCoreRecurrent(InferenceCore):
 
     def get_memomry_mask(self, idx):
         return self.trimaps[idx]
-
-class InferenceCoreRecurrentNeighbor(InferenceCoreRecurrent):
-    def __init__(self, model: DualMattingNetwork, dataset: VM108ValidationDataset, loader_iter, pad=16, last_data=None, memory_gt=False, memory_iter=False):
-        super().__init__(model, dataset, loader_iter, pad, last_data, memory_gt, memory_iter)
-    
-    def _forward(self, query_imgs, memory_img, memory_mask):
-        pha, gru_mems = self.model.forward(query_imgs, memory_img, memory_mask, *self.gru_mems)[:2]
-        if not self.disable_recurrent:
-            self.gru_mems = gru_mems
-        if pha.size(2) > 1:
-            pha = pha[:, :, [0]]
-        if self.masks is None:
-            self.masks = pha[0].cpu() 
-        else:
-            self.masks = torch.cat([self.masks, pha[0].cpu()], 0)
-        return pha
-
-    def _forward_fg(self, query_imgs, memory_img, memory_mask):
-        pha, fgr, gru_mems = self.model.forward(query_imgs, memory_img, memory_mask, *self.gru_mems)[:3]
-        if not self.disable_recurrent:
-            self.gru_mems = gru_mems
-        if pha.size(2) > 1:
-            pha = pha[:, :, [0]]
-        if self.masks is None:
-            self.masks = pha[0].cpu()
-            self.fgs = fgr[0].cpu()
-        else:
-            self.masks = torch.cat([self.masks, pha[0].cpu()], 0)
-            self.fgs = torch.cat([self.fgs, fgr[0].cpu()], 0)
-        return pha, fgr
-
-    def propagate(self, frame_idx=0, end_idx=-1, mask=None):
-        if end_idx < 0:
-            end_idx = self.total_frames
-        
-        # skip the first frame which is mem mask
-        # this_range = self.get_frame_stamps(frame_idx+1, end_idx, self.clip_size)
-        # still output the frame with mem mask since there's output FG
-        this_range = self.get_frame_stamps(frame_idx, end_idx, self.clip_size)
-
-        # take GT if input mask is not given
-        mask = self.pad_imgs(mask) if mask is not None else self.gts[[frame_idx]]
-
-        # input mask as result
-        # if self.masks is None:
-        #     self.masks = mask
-        # else:
-        #     self.masks = torch.cat([self.masks, mask], 0)
-
-        # mem_mask = torch.zeros_like(mask).unsqueeze(0).cuda() # 1, 1, 1, H, W
-        mem_mask = mask.unsqueeze(0).cuda() # 1, 1, 1, H, W
-        mem_rgb = self.images[frame_idx].unsqueeze(0).unsqueeze(0).cuda() # 1, 1, C, H, W
-
-        # for i in tqdm(range(10)):
-        for i in tqdm(range(len(this_range)-1)):
-            start, end = this_range[i:i+2]
-            while self.images.size(0) < end:
-                self.add_images_from_loader()
-            rgb = self.images[start:end].unsqueeze(0).cuda() # 1 T 3 H W
-            
-            out = self.forward(rgb, mem_rgb, mem_mask)
-            mem_rgb = self.images[end-1].unsqueeze(0).unsqueeze(0).cuda()
-            mem_mask = self.gts[end-1].unsqueeze(0).unsqueeze(0).cuda()
-            self.cur_idx = end
-        
-        return True
 
 class InferenceCoreRecurrentGFM(InferenceCoreRecurrent):
     def __init__(self, model: DualMattingNetwork, dataset: VM108ValidationDataset, loader_iter, pad=16, last_data=None, memory_gt=False, memory_iter=False):
@@ -488,18 +446,25 @@ class InferenceCoreRecurrentGFM(InferenceCoreRecurrent):
             self.gru_mems = gru_mems
         glance = self.seg_to_trimap(glance)
         self.save_bg = self.save_bg or (isinstance(bg, torch.Tensor) and (bg.size(2) in [3, 4]))
-        if self.masks is None:
-            self.masks = pha[0].cpu() 
-            self.glance_outs = glance[0].cpu()
-            self.focus_outs = focus[0].cpu()
-            if self.save_bg:
-                self.bgs = bg[0, :, :3].cpu()
-        else:
-            self.masks = torch.cat([self.masks, pha[0].cpu()], 0)
-            self.glance_outs = torch.cat([self.glance_outs, glance[0].cpu()], 0)
-            self.focus_outs = torch.cat([self.focus_outs, focus[0].cpu()], 0)
-            if self.save_bg:
-                self.bgs = torch.cat([self.bgs, bg[0, :, :3].cpu()], 0)
+        
+        self.masks = self.tensor_cat(self.masks, pha[0].cpu(), self.current_out_t)
+        self.glance_outs = self.tensor_cat(self.glance_outs, glance[0].cpu(), self.current_out_t)
+        self.focus_outs = self.tensor_cat(self.focus_outs, focus[0].cpu(), self.current_out_t)
+        if self.save_bg:
+            self.bgs = self.tensor_cat(self.bgs, bg[0, :, :3].cpu(), self.current_out_t)
+
+        # if self.masks is None:
+        #     self.masks = pha[0].cpu() 
+        #     self.glance_outs = glance[0].cpu()
+        #     self.focus_outs = focus[0].cpu()
+        #     if self.save_bg:
+        #         self.bgs = bg[0, :, :3].cpu()
+        # else:
+        #     self.masks = torch.cat([self.masks, pha[0].cpu()], 0)
+        #     self.glance_outs = torch.cat([self.glance_outs, glance[0].cpu()], 0)
+        #     self.focus_outs = torch.cat([self.focus_outs, focus[0].cpu()], 0)
+        #     if self.save_bg:
+        #         self.bgs = torch.cat([self.bgs, bg[0, :, :3].cpu()], 0)
         return pha
 
     def _forward_fg(self, query_imgs, memory_img, memory_mask):
@@ -516,20 +481,24 @@ class InferenceCoreRecurrentGFM(InferenceCoreRecurrent):
         fg_mask = idx == 2
         return tran_mask*0.5 + fg_mask
 
+    def clear(self):
+        super().clear()
+        del self.glance_outs
+        del self.focus_outs
+
     def save_video(self, path):
         if self.save_start_idx > 0:
             return
         name = self.name.replace('/', '_')
-        # path = os.path.join(path, vm108.mode)
         print(f"Save video: {path}, {name} ")
         # T, 3, H, W
-        T = self.masks.size(0)
-        masks = torch.repeat_interleave(self.masks, 3, dim=1)
+        T = self.current_out_t
+        masks = torch.repeat_interleave(self.masks[:T], 3, dim=1)
         gts = torch.repeat_interleave(self.gts[:T], 3, dim=1)
         vid_arr = [self.unpad_downsample(i) for i in [self.images[:T], masks, gts]]
         vid = torch.cat(vid_arr, axis=3).permute(0, 2, 3, 1) # T, H, 3W, 3
         if self.bgs is not None:
-            bgs = F.interpolate(self.bgs, masks.shape[-2:], mode='bilinear')
+            bgs = F.interpolate(self.bgs[:T], masks.shape[-2:], mode='bilinear')
             gt_bgs = self.gt_bgs[:T]
             blank = torch.zeros_like(bgs)
             vid_arr = [self.unpad_downsample(i) for i in [blank, bgs, gt_bgs]]
@@ -537,8 +506,8 @@ class InferenceCoreRecurrentGFM(InferenceCoreRecurrent):
             vid = torch.cat([vid, vid2], axis=1) # T, 2H, 3W, 3
 
         if self.glance_outs is not None:
-            glance = torch.repeat_interleave(self.glance_outs, 3, dim=1)
-            focus = torch.repeat_interleave(self.focus_outs, 3, dim=1)
+            glance = torch.repeat_interleave(self.glance_outs[:T], 3, dim=1)
+            focus = torch.repeat_interleave(self.focus_outs[:T], 3, dim=1)
             trimap = torch.repeat_interleave(self.trimaps[:T], 3, dim=1)
             vid_arr = [self.unpad_downsample(i) for i in [focus, glance, trimap]]
             vid2 = self.unpad_imgs(torch.cat(vid_arr, axis=3)).permute(0, 2, 3, 1) # T, H, 3W, 3
