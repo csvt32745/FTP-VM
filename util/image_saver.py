@@ -106,38 +106,47 @@ def pool_pairs(images, size, so):
     #TODO: adapt to mine
     req_images = defaultdict(list)
 
-    b, s, _, _, _ = images['gt'].shape
+    b, s, _, _, _ = images['rgb'].shape
 
     GT_name = 'GT'
     # for b_idx in range(b):
     #     GT_name += ' %s\n' % images['info']['name'][b_idx]
-    is_fg = 'pred_fg' in images
-    is_bg = 'pred_bg' in images
-    is_coarse_mask = 'coarse_mask' in images
-    is_out_mem = images['rgb'].size(1) == images['rgb_query'].size(1)
-    is_trimap = ((logits := images.get('logits', None)) is None) or (logits.size(2) != 3)
+    # is_fg = 'pred_fg' in images
+    # is_bg = 'pred_bg' in images
+    # is_coarse_mask = 'coarse_mask' in images
+    # is_out_mem = s == images['rgb_query'].size(1)
+    # is_trimap = ((logits := images.get('logits', None)) is None) or (logits.size(2) != 3)
+    is_trimap = 'trimap' in images
     is_gf = 'glance' in images
+    is_gt = 'gt_query' in images
     for b_idx in range(min(2, b)):
         # for b_idx in range(b):
-        if not is_out_mem:
-            req_images['RGB'].append(im_transform(images['rgb'][b_idx, 0], size))
-            if is_gf:
-                req_images['Glance'].append(mask_transform(images['glance_out'][b_idx, 0], size))
-                req_images['Focus'].append(mask_transform(images['focus'][b_idx, 0], size))
-            req_images['Mask'].append(np.zeros((size[1], size[0], 3)))
-            gt_mask = images['gt'][b_idx, 0]
-            req_images[GT_name].append(mask_transform(gt_mask, size))
-            # if is_fg:
-            #     req_images['Pred_FG'].append(np.zeros((size[1], size[0], 3)))
-            #     req_images['GT_FG'].append(im_transform(images['fg'][b_idx, 0]*gt_mask, size))
-            if is_bg:
-                req_images['Pred_BG'].append(np.zeros((size[1], size[0], 3)))
-                if (bg := images.get('bg', None)) is not None:
-                    req_images['GT_BG'].append(im_transform(bg[b_idx, 0], size))
-            if is_coarse_mask:
-                req_images['Coarse_Mask'].append(np.zeros((size[1], size[0], 3)))
-            if is_trimap:
-                req_images['Trimap'].append(mask_transform(images['mem_trimap'][b_idx, 0], size))
+        # if not is_out_mem:
+        #     req_images['RGB'].append(im_transform(images['rgb'][b_idx, 0], size))
+        #     if is_gf:
+        #         req_images['Glance'].append(mask_transform(images['glance_out'][b_idx, 0], size))
+        #         req_images['Focus'].append(mask_transform(images['focus'][b_idx, 0], size))
+        #     req_images['Mask'].append(images['mask'][b_idx, 0])
+            
+        #     gt_mask = images['gt'][b_idx, 0]
+        #     req_images[GT_name].append(mask_transform(gt_mask, size))
+
+        #     # req_images['Mask'].append(np.zeros((size[1], size[0], 3)))
+        #     # if is_fg:
+        #     #     req_images['Pred_FG'].append(np.zeros((size[1], size[0], 3)))
+        #     #     req_images['GT_FG'].append(im_transform(images['fg'][b_idx, 0]*gt_mask, size))
+        #     # if is_bg:
+        #     #     req_images['Pred_BG'].append(np.zeros((size[1], size[0], 3)))
+        #     #     if (bg := images.get('bg', None)) is not None:
+        #     #         req_images['GT_BG'].append(im_transform(bg[b_idx, 0], size))
+        #     # if is_coarse_mask:
+        #     #     req_images['Coarse_Mask'].append(np.zeros((size[1], size[0], 3)))
+        #     if is_trimap:
+        #         key = 'mem_trimap' if 'mem_trimap' in images else 'trimap'
+        #         req_images['Trimap'].append(mask_transform(images[key][b_idx, 0], size))
+        #         gt_mask = images['trimap'][b_idx, 0]
+        #     else:
+        #         pass
 
         srange = range(min(4, s-1))
         for s_idx in srange:
@@ -146,17 +155,19 @@ def pool_pairs(images, size, so):
                 req_images['Glance'].append(mask_transform(images['glance_out'][b_idx, s_idx], size))
                 req_images['Focus'].append(mask_transform(images['focus'][b_idx, s_idx], size))
             req_images['Mask'].append(mask_transform(images['mask'][b_idx, s_idx], size))
-            gt_mask = images['gt_query'][b_idx, s_idx]
-            req_images[GT_name].append(mask_transform(gt_mask, size))
+
+            if is_gt:
+                gt_mask = images['gt_query'][b_idx, s_idx]
+                req_images[GT_name].append(mask_transform(gt_mask, size))
             # if is_fg:
             #     req_images['Pred_FG'].append(im_transform(images['pred_fg'][b_idx, s_idx]*gt_mask, size))
             #     req_images['GT_FG'].append(im_transform(images['fg_query'][b_idx, s_idx]*gt_mask, size))
-            if is_bg:
-                req_images['Pred_BG'].append(im_transform(images['pred_bg'][b_idx, s_idx], size))
-                if (bg := images.get('bg', None)) is not None:
-                    req_images['GT_BG'].append(im_transform(bg[b_idx, 1+s_idx], size))
-            if is_coarse_mask:
-                req_images['Coarse_Mask'].append(mask_transform(images['coarse_mask'][b_idx, s_idx], size))
+            # if is_bg:
+            #     req_images['Pred_BG'].append(im_transform(images['pred_bg'][b_idx, s_idx], size))
+            #     if (bg := images.get('bg', None)) is not None:
+            #         req_images['GT_BG'].append(im_transform(bg[b_idx, 1+s_idx], size))
+            # if is_coarse_mask:
+            #     req_images['Coarse_Mask'].append(mask_transform(images['coarse_mask'][b_idx, s_idx], size))
             if is_trimap:
                 req_images['Trimap'].append(mask_transform(images['trimap'][b_idx, s_idx], size))
 

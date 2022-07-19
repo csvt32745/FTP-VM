@@ -2,6 +2,7 @@ import os
 import torch
 from torch.utils.data.dataset import Dataset
 from torchvision import transforms
+from torchvision.transforms import functional as F
 from PIL import Image
 import numpy as np
 import json
@@ -207,27 +208,28 @@ class VM240KValidationDataset(Dataset):
         self.trimap_width = trimap_width
         self.root = root
         self.size = (size, size) if type(size) == int else size
+        self.set_frames_per_item(frames_per_item)
+        self.resize_mode = F.InterpolationMode.BILINEAR
+        self.resize = self.size[0] > 0
+        
+        # if self.size[0] <= 0:
+        #     self.crop = lambda x: x # placeholder
+        # else:
+            # interp_mode = transforms.InterpolationMode.BILINEAR
+        #     self.crop = transforms.Compose([
+        #         transforms.Resize(self.size, interpolation=interp_mode)
+        #     ])
+
+        # self.final_im_transform = transforms.Compose([
+        #     transforms.ToTensor(),
+        #     # im_normalization,
+        # ])
+
+        # self.to_tensor = transforms.ToTensor()
+
+    def set_frames_per_item(self, frames_per_item):
         self.frames_per_item = frames_per_item
         self.prepare_frame_list()
-
-        self.dataset_length = len(self.idx_to_vid_and_chunk)
-        print('%d videos accepted in %s.' % (len(self.videos), self.root))
-
-        interp_mode = transforms.InterpolationMode.BILINEAR
-
-        if self.size[0] <= 0:
-            self.crop = lambda x: x # placeholder
-        else:
-            self.crop = transforms.Compose([
-                transforms.Resize(self.size, interpolation=interp_mode)
-            ])
-
-        self.final_im_transform = transforms.Compose([
-            transforms.ToTensor(),
-            # im_normalization,
-        ])
-
-        self.to_tensor = transforms.ToTensor()
 
     def prepare_frame_list(self):
         self.idx_to_vid_and_chunk = []
@@ -246,6 +248,9 @@ class VM240KValidationDataset(Dataset):
             self.idx_to_vid_and_chunk.extend(list(zip([vid]*len(frames), frames)))
             # (vid: str, frames: [...])
 
+        self.dataset_length = len(self.idx_to_vid_and_chunk)
+        print('%d videos accepted in %s.' % (len(self.videos), self.root))
+
     def __getitem__(self, idx):
         # video = self.videos[idx]
         video, frames = self.idx_to_vid_and_chunk[idx]
@@ -262,24 +267,31 @@ class VM240KValidationDataset(Dataset):
             # img I/O
             rgb = Image.open(os.path.join(self.root, video, 'rgb', name+"_rgb.png")).copy().convert('RGB')
             gt = Image.open(os.path.join(self.root, video, 'pha', name+".png")).copy().convert('L')
+            rgbs.append(F.to_tensor(rgb))
+            gts.append(F.to_tensor(gt))
 
-            rgb = self.crop(rgb)
-            gt = self.crop(gt)
+        if os.path.isdir(tri_dir := os.path.join(self.root, video, f'trimap_{self.trimap_width}')):    
+            trimaps = []
+            for name in frames:
+                trimap = Image.open(os.path.join(tri_dir, name+"_trimap.png")).copy().convert('L')
+                trimaps.append(F.to_tensor(trimap))
+            trimaps = torch.stack(trimaps)
+        else:
+            trimaps = None
+        rgbs = torch.stack(rgbs)
+        gts = torch.stack(gts)
 
-            rgb = self.final_im_transform(rgb)
-            gt = self.to_tensor(gt)
-
-            rgbs.append(rgb)
-            gts.append(gt)
-
-        rgbs = torch.stack(rgbs, 0)
-        gts = torch.stack(gts, 0)
+        if self.resize:
+            rgbs = F.resize(rgbs, self.size, interpolation=self.resize_mode)
+            gts = F.resize(gts, self.size, interpolation=self.resize_mode)
+            if trimaps is not None:
+                trimaps = F.resize(trimaps, self.size, interpolation=self.resize_mode)
 
         # print("vm108: ", full_img.shape, fg.shape, bg.shape, gt.shape)
         data = {
             'rgb': rgbs,
             'gt': gts,
-            'trimap': get_dilated_trimaps(gts, self.trimap_width),
+            'trimap': get_dilated_trimaps(gts, self.trimap_width) if trimaps is None else trimaps,
             'info': info
         }
         return data

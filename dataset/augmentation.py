@@ -51,10 +51,12 @@ class MotionAugmentation:
         phas = F.resized_crop(phas, *params, (self.size, self.size), interpolation=F.InterpolationMode.BILINEAR)
         params = transforms.RandomResizedCrop.get_params(bgrs, scale=(1, 1), ratio=self.aspect_ratio_range)
         bgrs = F.resized_crop(bgrs, *params, (self.size, self.size), interpolation=F.InterpolationMode.BILINEAR)
+        
+        fgrs, phas, bgrs = self.affine_all(fgrs, phas, bgrs)
 
         # pha scale
-        if random.random() < self.prob_pha_scale:
-            phas = self._motion_pha_scale(phas)
+        # if random.random() < self.prob_pha_scale:
+        #     phas = self._motion_pha_scale(phas)
 
         # Horizontal flip
         if random.random() < self.prob_hflip:
@@ -94,11 +96,11 @@ class MotionAugmentation:
             fgrs, phas, bgrs = self._motion_blur(fgrs, phas, bgrs)
 
         # bgr_pha
-        if self.get_bgr_pha:
-            fgrs, phas, bgrs, bgr_phas = self.affine_all_with_bgr_phas(fgrs, phas, bgrs)
-            return fgrs, phas, bgrs, bgr_phas
-        else:
-            fgrs, phas, bgrs = self.affine_all(fgrs, phas, bgrs)
+        # if self.get_bgr_pha:
+        #     fgrs, phas, bgrs, bgr_phas = self.affine_all_with_bgr_phas(fgrs, phas, bgrs)
+        #     return fgrs, phas, bgrs, bgr_phas
+        # else:
+            # fgrs, phas, bgrs = self.affine_all(fgrs, phas, bgrs)
         return fgrs, phas, bgrs
 
     def affine_all(self, fgrs, phas, bgrs):
@@ -158,7 +160,6 @@ class MotionAugmentation:
         bgrs = torch.stack([F.to_tensor(bgr) for bgr in bgrs])
         
         # Resize
-        # TODO: for convenient disable 
         params = transforms.RandomResizedCrop.get_params(bgrs, scale=(1, 1), ratio=self.aspect_ratio_range)
         bgrs = F.resized_crop(bgrs, *params, (self.size, self.size), interpolation=F.InterpolationMode.BILINEAR)
 

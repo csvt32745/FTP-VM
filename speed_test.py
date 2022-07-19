@@ -19,10 +19,12 @@ class InferenceSpeedTest:
         # parser.add_argument('--downsample-ratio', type=float, required=True)
         parser.add_argument('--precision', type=str, default='float32')
         parser.add_argument('--disable-refiner', action='store_true')
+        parser.add_argument('--gpu', type=int, default=0)
         self.args = parser.parse_args()
         
     def init_model(self):
-        self.device = 'cuda'
+        self.device = f'cuda'
+        # self.device = f'cuda:{self.args.gpu}'
         self.precision = {'float32': torch.float32, 'float16': torch.float16}[self.args.precision]
         self.model = get_model_by_string(self.args.model_name)()
         self.model = self.model.to(device=self.device, dtype=self.precision).eval()
@@ -43,6 +45,9 @@ class InferenceSpeedTest:
                 rec = [None]*4
                 # rec = [rec]*2
                 # rec = [rec, [None]]
+            print(rec)
+            rec = self.model(qimg, mimg, mask, *rec)[-2]
+
             t = time()
             for _ in tqdm(range(N)):
                 rec = self.model(qimg, mimg, mask, *rec)[-2]

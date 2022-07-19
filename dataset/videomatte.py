@@ -5,7 +5,7 @@ import torch
 from torch.utils.data import Dataset
 from PIL import Image
 import cv2
-# cv2.setNumThreads(0)
+cv2.setNumThreads(0)
 import numpy as np
 from .augmentation import MotionAugmentation
 from .util import get_dilated_trimaps, get_perturb_masks
@@ -26,8 +26,10 @@ class VideoMatteDataset(Dataset):
                  is_VM108=True,
                  mode='train',
                  bg_num=1,
-                 get_bgr_phas=False):
+                 get_bgr_phas=False,
+                 random_memtrimap=False):
         assert mode in ['train', 'test']
+        self.random_memtrimap = random_memtrimap
         self.bg_num = bg_num
         self.get_bgr_phas = get_bgr_phas
         # self.manager = Manager()
@@ -120,12 +122,16 @@ class VideoMatteDataset(Dataset):
             'fg': fgrs,
             'bg': torch.stack(bgr_clips, 0) if self.bg_num > 1 else bgr_clips[0],
             # 'rgb': fgrs*phas + bgrs*(1-phas),
-            'gt': phas,  
-            'trimap': get_dilated_trimaps(phas, 17, random_kernel=False),
-            'mem_trimap': get_dilated_trimaps(phas[[0]], np.random.randint(1, self.size//16)*2+1, random_kernel=True)
+            'gt': phas,
         }
         if self.get_bgr_phas:
             data['bgr_pha'] = bgr_phas
+
+        if self.random_memtrimap:
+            data['trimap'] = get_dilated_trimaps(phas, 17, random_kernel=False)
+            data['mem_trimap'] = get_dilated_trimaps(phas[[0]], np.random.randint(1, self.size//16)*2+1, random_kernel=True)
+        else:
+            data['trimap'] = get_dilated_trimaps(phas, np.random.randint(1, self.size//16)*2+1, random_kernel=True)
         
         return data
 
@@ -176,7 +182,7 @@ class VideoMatteDataset(Dataset):
     
     def _downsample_if_needed(self, img):
         w, h = img.size
-        if min(w, h) > self.size:
+        if min(w, h) > self.size*2:
             scale = self.size / min(w, h)
             w = int(scale * w)
             h = int(scale * h)

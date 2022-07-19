@@ -20,7 +20,7 @@ class InferenceCore:
         model, dataset:VM108ValidationDataset, loader_iter, pad=16, last_data=None
     ):
 
-        self.model = model
+        self.model = model.eval()
         self.dataset = dataset
         self.loader_iter = loader_iter
         # self.batch_size = dataloader.batch_size
@@ -339,8 +339,8 @@ class InferenceCoreRecurrent(InferenceCore):
         self.is_output_fg = self.model.is_output_fg
         self.forward = self._forward_fg if self.is_output_fg else self._forward
         self.memory_gt = memory_gt
-        assert (memory_iter <= 0) or (memory_iter%dataset.frames_per_item == 0)
-        self.memory_iter = memory_iter if memory_iter > 1 \
+        assert (memory_iter <= 0) or (memory_iter > 0 and (memory_iter%dataset.frames_per_item == 0))
+        self.memory_iter = memory_iter if memory_iter > 1 or memory_iter == 0 \
             else dataset.frames_per_item if memory_iter == 1 \
             else 1e7
         self.save_bg = False
@@ -399,6 +399,8 @@ class InferenceCoreRecurrent(InferenceCore):
         mask = self.pad_imgs(mask) if mask is not None else self.get_memomry_mask(mask_idx).unsqueeze(0)
         # =====================
 
+        # TODO
+        # mem_mask = torch.zeros_like(mask, device='cuda').unsqueeze(0) # 1, 1, 1, H, W
         mem_mask = mask.unsqueeze(0).cuda() # 1, 1, 1, H, W
         mem_rgb = self.images[mask_idx].unsqueeze(0).unsqueeze(0).cuda() # 1, 1, C, H, W
         frame_count = 0
@@ -410,16 +412,20 @@ class InferenceCoreRecurrent(InferenceCore):
                 self.add_images_from_loader()
             rgb = self.images[start:end].unsqueeze(0).cuda() # 1 T 3 H W
 
+            # if self.memory_iter == 0:
+            #     out = self.forward(rgb, rgb, self.get_memomry_mask(start).unsqueeze(0).unsqueeze(0).cuda())
+            # else:
+            if self.memory_iter >= 0 and frame_count >= self.memory_iter:
+                mem_rgb = self.images[start].unsqueeze(0).unsqueeze(0).cuda()
+                mem_mask = self.get_memomry_mask(start)
+                mem_mask = mem_mask.unsqueeze(0).unsqueeze(0).cuda()
+                frame_count = 0
+            
             time_start = time()
             out = self.forward(rgb, mem_rgb, mem_mask)
             total_time += time()-time_start
 
             frame_count += (end-start)
-            if frame_count >= self.memory_iter:
-                mem_rgb = self.images[end-1].unsqueeze(0).unsqueeze(0).cuda()
-                mem_mask = self.get_memomry_mask(end-1)
-                mem_mask = mem_mask.unsqueeze(0).unsqueeze(0).cuda()
-                frame_count = 0
             self.current_out_t = end
             
             # if end >= 60:
@@ -537,3 +543,19 @@ class InferenceCoreRecurrentBG(InferenceCoreRecurrent):
     def __init__(self, model: DualMattingNetwork, dataset: VM108ValidationDataset, loader_iter, pad=16, last_data=None, memory_gt=False, memory_iter=-1):
         super().__init__(model, dataset, loader_iter, pad, last_data, memory_gt, memory_iter)
         self.gru_mems = [None]*4
+
+class InferenceCoreRecurrent3chTrimap(InferenceCoreRecurrentGFM):
+    def __init__(self, model: DualMattingNetwork, dataset: VM108ValidationDataset, loader_iter, pad=16, last_data=None, memory_gt=False, memory_iter=-1):
+        super().__init__(model, dataset, loader_iter, pad, last_data, memory_gt, memory_iter)
+
+    def get_memomry_mask(self, idx):
+        trimap = self.trimaps[idx] if self.memory_gt else self.glance_outs[idx]
+        # print(trimap.shape, self.trimap_to_3chmask(trimap).shape)
+        return self.trimap_to_3chmask(trimap)
+
+    @staticmethod
+    def trimap_to_3chmask(trimap):
+        fg = trimap > (1-1e-3)
+        bg = trimap < 1e-3
+        mask = torch.cat([fg, ~(fg|bg), bg], dim=-3).float()
+        return mask

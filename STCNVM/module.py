@@ -13,7 +13,7 @@ from functools import reduce
 # from .STCN.network import *
 # from .STCN.modules import *
 
-from .basic_block import ResBlock
+from .basic_block import ResBlock, GatedConv2d, AvgPool
 from .recurrent_decoder import ConvGRU
 from . import cbam
 
@@ -135,7 +135,10 @@ class AlignDeformConv2d(nn.Module):
 
 
 class ConvSelfAttention(nn.Module):
-    def __init__(self, dim=32, attn_dim=32, head=2, qkv_bias=False, patch_size=16, drop_p=0.25):
+    def __init__(self, 
+        dim=32, attn_dim=32, head=2, 
+        qkv_bias=False, patch_size=16, 
+        drop_p=0., same_qkconv=False):
         super().__init__()
         # (b*t, 256, H/4, W/4)
         
@@ -164,7 +167,7 @@ class ConvSelfAttention(nn.Module):
         
         self.kernel, self.stride, self.padding = (patch_size, patch_size, 0)
         self.conv_q = get_convstem(dim, attn_dim*head, length)
-        self.conv_k = get_convstem(dim, attn_dim*head, length)
+        self.conv_k = self.conv_q if same_qkconv else get_convstem(dim, attn_dim*head, length)
         # self.conv_k = self.conv_q
         # (b*t, qkv, H', W')
         self.is_proj_v = head > 1
@@ -176,7 +179,7 @@ class ConvSelfAttention(nn.Module):
         self.patch_size = patch_size
         self.unfold = nn.Unfold(kernel_size=self.kernel, stride=self.stride, padding=self.padding)
         # print(self.unfold)
-        # self.drop_attn = nn.Dropout(p=drop_p)
+        self.drop_attn = nn.Dropout(p=drop_p)
         # self.drop_proj = nn.Dropout(p=drop_p)
 
     
@@ -192,8 +195,8 @@ class ConvSelfAttention(nn.Module):
             x_key = x_query
         # t_kv = x_kv.size(1)
 
-        x_query = x_query.flatten(0, 1)
-        x_key = x_key.flatten(0, 1)
+        x_query = self.drop_attn(x_query.flatten(0, 1))
+        x_key = self.drop_attn(x_key.flatten(0, 1))
         x_value = x_key if x_value is None else x_value.flatten(0, 1)
         
         v = self.conv_v(x_value) # ((b t), ...)
@@ -302,84 +305,6 @@ class DeformableFrameAlign(nn.Module):
         else:
             return self.forward_single_frame(x, h)
 
-class PRM(nn.Module):
-    def __init__(self, eps=1e-5):
-        super().__init__()
-        self.eps = eps
-        
-        # self.ker_dilate = [None] + [cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (i, i)) for i in range(1, 31)]
-        self.ker_dilate = [None] + [torch.ones((i, i)).cuda() for i in range(1, 16)]
-        
-    def forward_single_frame(self, small, large, dilate_width, sigmoid):
-        up = F.interpolate(small, size=large.shape[-2:])
-        # B, T, 1, H, W
-        
-        trans = torch.sigmoid(up) if sigmoid else up
-        trans = ((trans > self.eps) & (trans < 1-self.eps)).float()
-        # trans = ((up > self.eps) & (up < 1-self.eps)).detach().cpu().numpy()[:, :, 0]
-        # B, T, H, W -> B*T, H, W
-        # trans = trans.permute(B)
-        # b, t = trans.shape[:2]
-        if dilate_width >= 1:
-            trans = K.morphology.dilation(trans, self.ker_dilate[dilate_width], engine='convolution')
-        return trans*large + (1-trans)*up
-
-    def forward(self, small, large, dilate_width=0, sigmoid=False):
-        if small.ndim == 5:
-            B, T = small.shape[:2]
-            return self.forward_single_frame(
-                small.flatten(0, 1), 
-                large.flatten(0, 1), 
-                dilate_width,
-                sigmoid
-            ).unflatten(0, (B, T))
-        return self.forward_single_frame(small, large, dilate_width, sigmoid)
-
-class GlobalMatch(nn.Module):
-    def __init__(self, stride=4):
-        super().__init__()
-        self.stride=stride
-        self.pool = nn.Unfold(1, stride=stride)
-        # self.pool = nn.Sequential(
-        #     nn.AvgPool2d((stride, stride)),
-        #     nn.Flatten(-2, -1),
-        #     )
-        
-
-    def compute_scores_seq(self, a, b):
-        # B, N, CH
-        # min scores
-        l2_dist, min_idx = torch.pairwise_distance(a.unsqueeze(-2), b.unsqueeze(-3)).min(dim=-1)
-        # l2_dist = l2_dist.clamp_min(0)
-        # print(min_idx)
-        # print(min_idx)
-        # print(b[min_idx].shape)
-        # l2_dist = 1-2/(1+torch.exp(l2_dist))
-        l2_dist = 2*torch.sigmoid(-l2_dist)
-        return l2_dist
-    
-    def _pool(self, x):
-        if x.ndim == 5:
-            B, T = x.shape[:2]
-            return self.pool(x.flatten(0, 1)).unflatten(0, (B, T))
-        return self.pool(x)
-
-    def forward(self, a,  b):
-        if a.ndim == 3:
-            return self.compute_scores_seq(a, b)
-        oh, ow = a.shape[-2:]
-
-        a = self._pool(a)
-        h, w = oh//self.stride, ow//self.stride
-        a = a.transpose(-1, -2)
-        # a = a.flatten(-2, -1).transpose(-1, -2)
-        b = self._pool(b).transpose(-1, -2)
-        
-        scores = self.compute_scores_seq(a, b)
-        # print(scores.shape, a.shape, b.shape, (h, w), (oh, ow))
-        return F.interpolate(scores.unflatten(-1, (h, w)), size=(oh, ow), mode='nearest').unsqueeze(-3)
-        
-
 class ChannelAttention(nn.Module):
     def __init__(self, ch_in, ch_out):
         super().__init__()
@@ -460,12 +385,15 @@ class FocalModulation(nn.Module):
         self.focal_factor = focal_factor
         self.use_postln = use_postln
 
+        # self.q = nn.Conv2d(dim, dim, kernel_size=1, bias=bias)
+        # self.f = nn.Conv2d(dim, dim + (self.focal_level+1), kernel_size=1, bias=bias)
         self.q = nn.Linear(dim, dim, bias=bias)
         self.f = nn.Linear(dim, dim + (self.focal_level+1), bias=bias)
         self.h = nn.Conv2d(dim, dim, kernel_size=1, stride=1, bias=bias)
 
         self.act = nn.GELU()
         self.proj = nn.Linear(dim, dim)
+        # self.proj = nn.Conv2d(dim, dim, kernel_size=1)
         self.proj_drop = nn.Dropout(proj_drop)
         self.focal_layers = nn.ModuleList()
                 
@@ -517,6 +445,76 @@ class FocalModulation(nn.Module):
         out = self.proj_drop(out).permute(0, 3, 1, 2)
         return out
 
+class CrossFocalModulation(nn.Module):
+    def __init__(self, dim, focal_window, focal_level, focal_factor=2, bias=True, proj_drop=0., use_postln=False):
+        super().__init__()
+
+        self.dim = dim
+        self.focal_window = focal_window
+        self.focal_level = focal_level
+        self.focal_factor = focal_factor
+        self.use_postln = use_postln
+
+        # self.q = nn.Conv2d(dim, dim, kernel_size=1, bias=bias)
+        # self.f = nn.Conv2d(dim, dim + (self.focal_level+1), kernel_size=1, bias=bias)
+        self.q = nn.Linear(dim, dim, bias=bias)
+        self.f = nn.Linear(dim, dim + (self.focal_level+1), bias=bias)
+        self.h = nn.Conv2d(dim, dim, kernel_size=1, stride=1, bias=bias)
+
+        self.act = nn.GELU()
+        self.proj = nn.Linear(dim, dim)
+        # self.proj = nn.Conv2d(dim, dim, kernel_size=1)
+        self.proj_drop = nn.Dropout(proj_drop)
+        self.focal_layers = nn.ModuleList()
+                
+        self.kernel_sizes = []
+        for k in range(self.focal_level):
+            kernel_size = self.focal_factor*k + self.focal_window
+            self.focal_layers.append(
+                nn.Sequential(
+                    nn.Conv2d(dim, dim, kernel_size=kernel_size, stride=1, 
+                    groups=dim, padding=kernel_size//2, bias=False),
+                    nn.GELU(),
+                    )
+                )              
+            self.kernel_sizes.append(kernel_size)          
+        if self.use_postln:
+            self.ln = nn.LayerNorm(dim)
+
+    def forward(self, x, v):
+        """
+        Args:
+            x: input features with shape of (B, C, H, W)
+        """
+        C = x.size(1)
+        x = x.permute(0, 2, 3, 1)
+        v = v.permute(0, 2, 3, 1)
+        
+        # pre linear projection
+        v = self.f(v).permute(0, 3, 1, 2).contiguous() # for feat aggr
+        q = self.q(x).permute(0, 3, 1, 2).contiguous()
+        ctx, self.gates = torch.split(v, (C, self.focal_level+1), 1)
+        
+        # context aggreation
+        ctx_all = 0 
+        for l in range(self.focal_level):         
+            ctx = self.focal_layers[l](ctx)
+            ctx_all = ctx_all + ctx*self.gates[:, l:l+1]
+        ctx_global = self.act(ctx.mean(2, keepdim=True).mean(3, keepdim=True))
+        ctx_all = ctx_all + ctx_global*self.gates[:,self.focal_level:]
+
+        # focal modulation
+        modulator = self.h(ctx_all)
+        out = q*modulator
+        out = out.permute(0, 2, 3, 1).contiguous()
+        if self.use_postln:
+            out = self.ln(out)
+        
+        # post linear porjection
+        out = self.proj(out)
+        out = self.proj_drop(out).permute(0, 3, 1, 2)
+        return out
+
 class AttnGRU(nn.Module):
     def __init__(self,
                  channels: int,
@@ -524,7 +522,8 @@ class AttnGRU(nn.Module):
                  padding: int = 1,
                  hidden = 16,
                  patch_size=9,
-                 head=1):
+                 head=1,
+                 dropout=0):
         super().__init__()
         self.channels = channels
         self.ih = nn.Sequential(
@@ -535,10 +534,10 @@ class AttnGRU(nn.Module):
             nn.Conv2d(channels * 2, channels, kernel_size, padding=padding),
             nn.Tanh()
         )
-        self.attn = SoftCrossAttention(channels, hidden, head, patch_size=patch_size, is_proj_v=True)
+        self.attn = SoftCrossAttention(channels, hidden, head, patch_size=patch_size, is_proj_v=True, dropout=dropout)
         
     def forward_single_frame(self, x, h):
-        h = (h + torch.tanh(self.attn(x, h)))*0.5
+        h = torch.tanh(self.attn(x, h))
         r, z = self.ih(torch.cat([x, h], dim=1)).split(self.channels, dim=1)
         c = self.hh(torch.cat([x, r * h], dim=1))
         h = (1 - z) * h + z * c
@@ -562,22 +561,7 @@ class AttnGRU(nn.Module):
         else:
             return self.forward_single_frame(x, h)
 
-class AttnGRU2(AttnGRU):
-    def __init__(self, 
-        channels: int, 
-        kernel_size: int = 3, 
-        padding: int = 1, 
-        hidden=16, 
-        patch_size=9, 
-        head=1):
-        super().__init__(channels, kernel_size, padding, hidden, patch_size, head)
-    
-    def forward_single_frame(self, x, h):
-        h = torch.tanh(self.attn(x, h))
-        r, z = self.ih(torch.cat([x, h], dim=1)).split(self.channels, dim=1)
-        c = self.hh(torch.cat([x, r * h], dim=1))
-        h = (1 - z) * h + z * c
-        return h, h
+AttnGRU2 = AttnGRU
 
 class AttnGRU2_big(AttnGRU2):
     def __init__(self, 
@@ -594,6 +578,7 @@ class FocalGRU(ConvGRU):
     def __init__(self, channels: int, kernel_size: int = 3, padding: int = 1):
         super().__init__(channels, kernel_size, padding)
         
+        # self.focal = FocalModulation(channels, 3, 1)
         self.focal = FocalModulation(channels, 5, 4)
         
     def forward_single_frame(self, x, h):
@@ -647,20 +632,28 @@ class SoftCrossAttention(nn.Module):
             hidden=32,
             head=2,
             patch_size=9,
-            is_proj_v=False
+            is_proj_v=False,
+            dropout = 0.0
         ):
         super().__init__()
         self.head = head
         self.is_proj_v = head > 1 or is_proj_v
         hidden_v = hidden if self.is_proj_v else -1
         self.kernel, self.stride, self.padding = [(i, i) for i in [patch_size, patch_size//2, patch_size//2]]
-        self.ss_k = SoftSplit(dim, hidden, self.kernel, self.stride, self.padding)
-        self.ss_v = SoftSplit(dim, hidden_v, self.kernel, self.stride, self.padding)
+        self.ss_k = SoftSplit(dim, hidden, self.kernel, self.stride, self.padding, dropout=dropout)
+        self.ss_v = SoftSplit(dim, hidden_v, self.kernel, self.stride, self.padding, dropout=dropout)
         self.sc = SoftComp(dim, hidden_v, self.kernel, self.stride, self.padding)
         
         self.proj_k = nn.Linear(hidden, hidden*head)
         self.proj_v = nn.Linear(hidden, hidden*head) if self.is_proj_v else nn.Identity()
-        self.proj_out = nn.Linear(hidden*head, hidden) if self.is_proj_v else nn.Identity()
+        if self.is_proj_v:
+            if dropout > 0:
+                self.proj_out = nn.Sequential(nn.Linear(hidden*head, hidden), nn.Dropout(p=dropout))
+            else:
+                self.proj_out = nn.Linear(hidden*head, hidden)
+        else:
+            self.proj_out = nn.Identity()
+
         self.patch_size = patch_size
 
     def _forward(self, x_query, x_key, x_value=None):
@@ -737,3 +730,229 @@ class MemoryReader(nn.Module):
         val = torch.bmm(mv, affinity) # b, ch_val, nq
         val = rearrange(val, 'b c (t h w) -> b t c h w', h=H, w=W)
         return val
+
+class GFMGatedFuse(nn.Module):
+    def __init__(self, ch_feats, ch_out, dropout=0., ch_mask=1):
+        super().__init__()
+        self.fuse = FeatureFusion(ch_feats[-1]*2, ch_out)
+        self.bottleneck = PSP(ch_out, ch_out//4, ch_out)
+        self.sa = ConvSelfAttention(ch_feats[-1], head=2, patch_size=1, drop_p=dropout)
+        # self.sa = SoftCrossAttention(ch_feats[-1], hidden=16 head=2, patch_size=1, drop_p=0)
+        self.avgpool = AvgPool(num=4)
+        self.avg = nn.AvgPool2d((2, 2))
+        self.ch_feats_out = list(ch_feats)
+        self.ch_feats_out[-1] = ch_out
+        self.gated_convs = nn.ModuleList([
+            nn.Sequential(
+                GatedConv2d(ch_feats[i]+ch_mask+(ch_feats[i-1] if i > 0 else 0), ch_feats[i], 3, 1, 1),
+                nn.Conv2d(ch_feats[i], ch_feats[i], 3, 1, 1),
+                nn.LeakyReLU(0.2),
+            )
+            for i in range(4)
+        ])
+        self.dropout = nn.Dropout(dropout)
+        
+        
+    def forward(self, feats_q, feats_m, masks_m):
+        masks = self.avgpool(masks_m)
+
+        f4_m = feats_m[0]
+        b, t = f4_m.shape[:2]
+        f4_m = self.gated_convs[0](torch.cat([f4_m, masks[0]], dim=2).flatten(0, 1))
+        for i in range(1, 4):
+            f4_m = torch.cat([self.avg(f4_m), feats_m[i].flatten(0, 1), masks[i].flatten(0, 1)],  dim=1)
+            f4_m = self.gated_convs[i](f4_m)
+        f4_m = f4_m.unflatten(0, (b, t))
+
+        f4_q = feats_q[3]
+        f4_m, A = self.sa(f4_q, feats_m[3], f4_m)
+        f4_m = self.dropout(f4_m)
+        # TODO
+        # f4 = self.fuse(torch.cat([f4_q, torch.zeros_like(f4_m)], dim=2))
+        f4 = self.fuse(torch.cat([f4_q, f4_m], dim=2))
+        f4 = self.bottleneck(f4)
+
+        feats = list(feats_q)
+        feats[3] = f4
+        return feats, feats
+
+class GFMGatedFuse_head1(GFMGatedFuse):
+    def __init__(self, ch_feats, ch_out, dropout=0.):
+        super().__init__(ch_feats, ch_out, dropout=dropout)
+        del self.sa
+        self.sa = ConvSelfAttention(ch_feats[-1], head=1, patch_size=1, drop_p=0)
+
+class GFMGatedFuse_sameqk(GFMGatedFuse):
+    def __init__(self, ch_feats, ch_out, dropout=0.):
+        super().__init__(ch_feats, ch_out, dropout=dropout)
+        del self.sa
+        self.sa = ConvSelfAttention(ch_feats[-1], head=2, patch_size=1, drop_p=0, same_qkconv=True)
+
+class GFMGatedFuse_sameqk_head1(GFMGatedFuse):
+    def __init__(self, ch_feats, ch_out, dropout=0.):
+        super().__init__(ch_feats, ch_out, dropout=dropout)
+        del self.sa
+        self.sa = ConvSelfAttention(ch_feats[-1], head=1, patch_size=1, drop_p=0, same_qkconv=True)
+
+class GFMGatedFuse_samekv(GFMGatedFuse):
+    def __init__(self, ch_feats, ch_out, dropout=0.):
+        super().__init__(ch_feats, ch_out, dropout=dropout)
+        
+    def forward(self, feats_q, feats_m, masks_m):
+        masks = self.avgpool(masks_m)
+        f4_m = feats_m[0]
+        b, t = f4_m.shape[:2]
+        f4_m = self.gated_convs[0](torch.cat([f4_m, masks[0]], dim=2).flatten(0, 1))
+        for i in range(1, 4):
+            f4_m = torch.cat([self.avg(f4_m), feats_m[i].flatten(0, 1), masks[i].flatten(0, 1)],  dim=1)
+            f4_m = self.gated_convs[i](f4_m)
+        f4_m = f4_m.unflatten(0, (b, t))
+
+        f4_q = feats_q[3]
+        f4_m, A = self.sa(f4_q, f4_m)
+
+        f4 = self.fuse(torch.cat([f4_q, f4_m], dim=2))
+        f4 = self.bottleneck(f4)
+
+        feats = list(feats_q)
+        feats[3] = f4
+        return feats, feats
+
+class GFMGatedFuse_splitstage(nn.Module):
+    def __init__(self, ch_feats, ch_out):
+        super().__init__()
+        self.fuse = FeatureFusion(ch_feats[-1]*2, ch_out)
+        self.bottleneck = PSP(ch_out, ch_out//4, ch_out)
+        self.sa = ConvSelfAttention(ch_feats[-1], head=2, patch_size=1, drop_p=0)
+        # self.sa = SoftCrossAttention(ch_feats[-1], hidden=16 head=2, patch_size=1, drop_p=0)
+        self.avgpool = AvgPool(num=4)
+        self.ch_feats_out = list(ch_feats)
+        self.ch_feats_out[-1] = ch_out
+        avg_size = [int(2**i) for i in range(4)][::-1]
+        self.gated_convs = nn.ModuleList([
+            nn.Sequential(
+                GatedConv2d(ch_feats[i]+1, ch_feats[i], 3, 1, 1),
+                nn.Conv2d(ch_feats[i], ch_feats[i], 3, 1, 1),
+                nn.LeakyReLU(0.2),
+                nn.AvgPool2d((avg_size[i], avg_size[i]))
+            )
+            for i in range(4)
+        ])
+        self.gate_fuse = nn.Conv2d(sum(ch_feats), ch_feats[-1], 3, 1, 1)
+        
+        
+    def forward(self, feats_q, feats_m, masks_m):
+        masks = self.avgpool(masks_m)
+
+        b, t = feats_m[0].shape[:2]
+        gated_feats = [
+            self.gated_convs[i](
+                torch.cat([feats_m[i], masks[i]], dim=2).flatten(0, 1)
+            ) 
+            for i in range(4)
+        ]
+        f4_m = self.gate_fuse(torch.cat(gated_feats, dim=1))
+        f4_m = f4_m.unflatten(0, (b, t))
+
+        f4_q = feats_q[3]
+        f4_m, A = self.sa(f4_q, feats_m[3], f4_m)
+
+        f4 = self.fuse(torch.cat([f4_q, f4_m], dim=2))
+        f4 = self.bottleneck(f4)
+
+        feats = list(feats_q)
+        feats[3] = f4
+        return feats, feats
+
+class GFMGatedFuse_splitfeatfuse(GFMGatedFuse_splitstage):
+    def __init__(self, ch_feats, ch_out):
+        super().__init__(ch_feats, ch_out)
+        # self.fuse = FeatureFusion(ch_feats[-1]*2, ch_out)
+        # self.bottleneck = PSP(ch_out, ch_out//4, ch_out)
+        # self.sa = ConvSelfAttention(ch_feats[-1], head=2, patch_size=1, drop_p=0)
+        # # self.sa = SoftCrossAttention(ch_feats[-1], hidden=16 head=2, patch_size=1, drop_p=0)
+        # self.avgpool = AvgPool(num=4)
+        # self.ch_feats_out = list(ch_feats)
+        # self.ch_feats_out[-1] = ch_out
+        # avg_size = [int(2**i) for i in range(4)][::-1]
+        # self.gated_convs = nn.ModuleList([
+        #     nn.Sequential(
+        #         GatedConv2d(ch_feats[i]+1, ch_feats[i], 3, 1, 1),
+        #         nn.Conv2d(ch_feats[i], ch_feats[i], 3, 1, 1),
+        #         nn.LeakyReLU(0.2),
+        #         nn.AvgPool2d((avg_size[i], avg_size[i]))
+        #     )
+        #     for i in range(4)
+        # ])
+        self.gate_fuse = nn.Sequential(
+            cbam.ChannelGate(sum(ch_feats)),
+            nn.Conv2d(sum(ch_feats), ch_feats[-1], 3, 1, 1),
+        )
+        
+        
+        
+    def forward(self, feats_q, feats_m, masks_m):
+        masks = self.avgpool(masks_m)
+
+        b, t = feats_m[0].shape[:2]
+        gated_feats = [
+            self.gated_convs[i](
+                torch.cat([feats_m[i], masks[i]], dim=2).flatten(0, 1)
+            ) 
+            for i in range(4)
+        ]
+        f4_m = self.gate_fuse(torch.cat(gated_feats, dim=1))
+        f4_m = f4_m.unflatten(0, (b, t))
+
+        f4_q = feats_q[3]
+        f4_m, A = self.sa(f4_q, feats_m[3], f4_m)
+
+        f4 = self.fuse(torch.cat([f4_q, f4_m], dim=2))
+        f4 = self.bottleneck(f4)
+
+        feats = list(feats_q)
+        feats[3] = f4
+        return feats, feats
+
+class GFMGatedFuse2(nn.Module):
+    def __init__(self, ch_feats, ch_out, dropout=0., ch_mask=1):
+        super().__init__()
+        self.fuse = FeatureFusion(ch_feats[-1]*2, ch_out)
+        self.bottleneck = PSP(ch_out, ch_out//4, ch_out)
+        self.sa = ConvSelfAttention(ch_feats[-1], head=2, patch_size=1, drop_p=dropout)
+        # self.sa = SoftCrossAttention(ch_feats[-1], hidden=16 head=2, patch_size=1, drop_p=0)
+        self.avgpool = AvgPool(num=4)
+        self.avg = nn.AvgPool2d((2, 2))
+        self.ch_feats_out = list(ch_feats)
+        self.ch_feats_out[-1] = ch_out
+        self.gated_convs = nn.ModuleList([
+            nn.Sequential(
+                GatedConv2d(ch_feats[i]+ch_mask+(ch_feats[i-1] if i > 0 else 0), ch_feats[i], 3, 1, 1),
+                nn.Conv2d(ch_feats[i], ch_feats[i], 3, 1, 1),
+                nn.LeakyReLU(0.2),
+            )
+            for i in range(4)
+        ])
+        self.dropout = nn.Dropout(dropout)
+        
+        
+    def forward(self, feats_q, feats_m, masks_m):
+        masks = self.avgpool(masks_m)
+
+        f4_m = feats_m[0]
+        b, t = f4_m.shape[:2]
+        f4_m = self.gated_convs[0](torch.cat([f4_m, masks[0]], dim=2).flatten(0, 1))
+        for i in range(1, 4):
+            f4_m = torch.cat([self.avg(f4_m), feats_m[i].flatten(0, 1), masks[i].flatten(0, 1)],  dim=1)
+            f4_m = self.gated_convs[i](f4_m)
+        f4_m = f4_m.unflatten(0, (b, t))
+
+        f4_q = feats_q[3]
+        f4_m, A = self.sa(f4_q, feats_m[3], f4_m)
+        f4_m = self.dropout(f4_m)
+        f4 = self.fuse(torch.cat([f4_q, f4_m], dim=2))
+        f4 = self.bottleneck(f4)
+
+        feats = list(feats_q)
+        feats[3] = f4
+        return feats, feats

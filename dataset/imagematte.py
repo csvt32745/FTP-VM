@@ -3,7 +3,7 @@ import os
 import random
 import numpy as np
 import cv2
-# cv2.setNumThreads(0)
+cv2.setNumThreads(0)
 import torch
 from torch.utils.data import Dataset
 from PIL import Image
@@ -22,8 +22,10 @@ class ImageMatteDataset(Dataset):
                  seq_sampler,
                  transform: MotionAugmentation,
                  bg_num=1,
-                 get_bgr_phas=False):
+                 get_bgr_phas=False,
+                 random_memtrimap=False):
         self.get_bgr_phas = get_bgr_phas
+        self.random_memtrimap = random_memtrimap
         self.imagematte_dir = imagematte_dir
         self.imagematte_files = os.listdir(os.path.join(imagematte_dir, 'FG'))
         self.background_image_dir = background_image_dir
@@ -83,12 +85,17 @@ class ImageMatteDataset(Dataset):
             'bg': torch.stack(bgr_clips, 0) if self.bg_num > 1 else bgr_clips[0],
             # 'rgb': fgrs*phas + bgrs*(1-phas),
             'gt': phas,  
-            'trimap': get_dilated_trimaps(phas, 17, random_kernel=False),
-            'mem_trimap': get_dilated_trimaps(phas[[0]], np.random.randint(1, self.size//16)*2+1, random_kernel=True)
+            
+            
         }
         if self.get_bgr_phas:
             data['bgr_pha'] = bgr_phas
         
+        if self.random_memtrimap:
+            data['trimap'] = get_dilated_trimaps(phas, 17, random_kernel=False)
+            data['mem_trimap'] = get_dilated_trimaps(phas[[0]], np.random.randint(1, self.size//16)*2+1, random_kernel=True)
+        else:
+            data['trimap'] = get_dilated_trimaps(phas, np.random.randint(1, self.size//16)*2+1, random_kernel=True)
         return data
 
     @lru_cache(maxsize=128)
@@ -134,7 +141,7 @@ class ImageMatteDataset(Dataset):
     
     def _downsample_if_needed(self, img):
         w, h = img.size
-        if min(w, h) > self.size:
+        if min(w, h) > self.size*2:
             scale = self.size / min(w, h)
             w = int(scale * w)
             h = int(scale * h)

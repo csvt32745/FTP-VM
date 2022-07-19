@@ -21,11 +21,6 @@ from dataset.augmentation import *
 from util.logger import TensorboardLogger
 from util.hyper_para import HyperParameters
 
-# from torch.multiprocessing import set_start_method
-# if __name__ == '__main__':
-    # prevent from deadlock
-    # set_start_method('spawn')
-    
 
 """
 Initial setup
@@ -104,9 +99,9 @@ def renew_vm108_loader(long_seq=True, nb_frame_only=False):
     # size=512
     size=para['size']
     train_dataset = VideoMatteDataset(
-        '../dataset_sc/VideoMatting108',
-        '../dataset_sc/BG20k/BG-20k/train',
-        '../dataset_sc/VideoMatting108/BG_done',
+        '../dataset_sc/VideoMatting108_512',
+        '../dataset_sc/BG20k_512/BG-20k/train',
+        '../dataset_sc/VideoMatting108_512/BG_done',
         size=size,
         # seq_length=12 if long_seq else 5,
         seq_length=6 if long_seq else 8,
@@ -114,7 +109,8 @@ def renew_vm108_loader(long_seq=True, nb_frame_only=False):
         transform=VideoMatteTrainAugmentation(size, get_bgr_pha=para['get_bgr_pha']),
         is_VM108=True,
         bg_num=1,
-        get_bgr_phas=para['get_bgr_pha']
+        get_bgr_phas=para['get_bgr_pha'],
+        random_memtrimap=para['random_memtrimap'],
     )
     print('VM108 dataset size: ', len(train_dataset))
 
@@ -125,21 +121,22 @@ def renew_d646_loader(long_seq=True, nb_frame_only=False):
     # size=512
     size=para['size']
     train_dataset = ImageMatteDataset(
-        '../dataset_sc/Distinctions646/Train',
-        '../dataset_sc/BG20k/BG-20k/train',
-        '../dataset_sc/VideoMatting108/BG_done',
+        '../dataset_sc/Distinctions646_512/Train',
+        '../dataset_sc/BG20k_512/BG-20k/train',
+        '../dataset_sc/VideoMatting108_512/BG_done',
         size=size,
         # seq_length=6 if long_seq else 3,
-        seq_length=4 if long_seq else 4,
+        seq_length=3 if long_seq else 4,
         seq_sampler=TrainFrameSampler() if nb_frame_only else TrainFrameSamplerAddFarFrame(),
         transform=ImageMatteAugmentation(size, get_bgr_pha=para['get_bgr_pha']),
         bg_num=1,
-        get_bgr_phas=para['get_bgr_pha']
+        get_bgr_phas=para['get_bgr_pha'],
+        random_memtrimap=para['random_memtrimap'],
     )
     print('D646 dataset size: ', len(train_dataset))
 
     # return construct_loader(train_dataset, batch_size=8 if long_seq else 4)
-    return construct_loader(train_dataset, batch_size=6 if long_seq else 10)
+    return construct_loader(train_dataset, batch_size=12 if long_seq else 10)
 
 def renew_ytvis_loader(long_seq=True, nb_frame_only=False):
     size = min(352, para['size'])
@@ -152,6 +149,7 @@ def renew_ytvis_loader(long_seq=True, nb_frame_only=False):
         8 if long_seq else 8,
         TrainFrameSampler(speed) if nb_frame_only else TrainFrameSamplerAddFarFrame(speed),
         YouTubeVISAugmentation(size),
+        random_memtrimap=para['random_memtrimap'],
     )
     print('YTVis dataset size: ', len(train_dataset))
 
@@ -201,10 +199,12 @@ try:
 
         # Train loop
         model.train()
+
+        # Segmentation pass
         if total_iter < para['seg_stop'] and ((seg_count == 0) or (seg_iter < para['seg_iter'])):
             print("Segmentation Training: ")
             for data in seg_loader:
-                model.do_pass(data, total_iter, segmentation_pass=True, ckpt_dict=get_extra_dict())
+                model.do_pass(data, total_iter, segmentation_pass=True)
                 total_iter += 1
                 seg_iter += 1
                 
@@ -215,9 +215,10 @@ try:
                     print("Segmentation Stop.")
                     break
             seg_count = 1
+        # Matting pass
         else:    
             for data in train_loader:
-                model.do_pass(data, total_iter, ckpt_dict=get_extra_dict())
+                model.do_pass(data, total_iter)
                 total_iter += 1
                 seg_count += 1
 

@@ -3,7 +3,7 @@ import os
 import json
 import numpy as np
 import cv2
-# cv2.setNumThreads(0)
+cv2.setNumThreads(0)
 import random
 from torch.utils.data import Dataset
 from PIL import Image
@@ -16,8 +16,9 @@ from tqdm import tqdm
 from .util import get_dilated_trimaps, get_perturb_masks
 
 class YouTubeVISDataset(Dataset):
-    def __init__(self, videodir, annfile, size, seq_length, seq_sampler, transform=None, debug_data=None):
+    def __init__(self, videodir, annfile, size, seq_length, seq_sampler, transform=None, debug_data=None, random_memtrimap=False):
         self.videodir = videodir
+        self.random_memtrimap = random_memtrimap
         self.size = size
         self.seq_length = seq_length
         self.seq_sampler = seq_sampler
@@ -89,11 +90,13 @@ class YouTubeVISDataset(Dataset):
         
         data = {
             'rgb': imgs,
-            'gt': segs,
-            'trimap': get_dilated_trimaps(segs, 17, random_kernel=True),
-            'mem_trimap': get_dilated_trimaps(segs[[0]], np.random.randint(1, self.size//16)*2+1, random_kernel=True)
+            # 'gt': segs,
         }
-        
+        if self.random_memtrimap:
+            data['trimap'] = get_dilated_trimaps(segs, 17, random_kernel=False)
+            data['mem_trimap'] = get_dilated_trimaps(segs[[0]], np.random.randint(1, self.size//16)*2+1, random_kernel=True)
+        else:
+            data['trimap'] = get_dilated_trimaps(segs, np.random.randint(1, self.size//16)*2+1, random_kernel=True)
         return data
     
 
@@ -147,4 +150,28 @@ class YouTubeVISAugmentation:
             imgs = F.hflip(imgs)
             segs = F.hflip(segs)
         
+        return imgs, segs
+
+
+class YouTubeVISValidAugmentation:
+    def __init__(self, size):
+        if type(size) in [tuple, list]:
+            self.size = size
+        else:
+            self.size = (size, size)
+        
+        self.resize = self.size[0] > 0
+        self.resize_mode = F.InterpolationMode.BILINEAR
+        
+
+    def __call__(self, imgs, segs):
+        
+        # To tensor
+        imgs = torch.stack([F.to_tensor(img) for img in imgs])
+        segs = torch.stack([F.to_tensor(seg) for seg in segs])
+        
+        # Resize
+        if self.resize:
+            imgs = F.resize(imgs, self.size, interpolation=self.resize_mode)
+            segs = F.resize(segs, self.size, interpolation=self.resize_mode)
         return imgs, segs

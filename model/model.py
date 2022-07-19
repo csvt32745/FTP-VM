@@ -29,28 +29,22 @@ from warmup_scheduler import GradualWarmupScheduler
 class PropagationModel:
     def __init__(self, para, logger=None, save_path=None, local_rank=0, world_size=1):
         self.para = para
-        # self.single_object = para['single_object']
-        # self.local_rank = local_rank
-
-        # self.PNet = nn.parallel.DistributedDataParallel(
-        #     PropagationNetwork(True).cuda(), 
-        #     device_ids=[local_rank], output_device=local_rank, broadcast_buffers=False)
-        # self.PNet = PropagationNetwork(True).cuda()
         print("Using model: ", para['which_model'])
         # "which_model=which_module"
         self.PNet = get_model_by_string(para['which_model'])().cuda()
         
         print("Net Parameters: ", summary(self.PNet, verbose=0).total_params)
-        # Setup logger when local_rank=0
         self.logger = logger
         self.save_path = save_path
+        os.makedirs(os.path.dirname(self.save_path), exist_ok=True)
+        self.para.save(os.path.join(os.path.dirname(self.save_path), 'config.json'))
+        
+        self.split_trimap = para['split_trimap']
+        self.random_memtrimap = para['random_memtrimap']
+
         if logger is not None:
             self.last_time = time.time()
         self.train_integrator = Integrator(self.logger, distributed=False)
-        # if self.single_object:
-        #     self.train_integrator.add_hook(iou_hooks_so)
-        # else:
-        #     self.train_integrator.add_hook(iou_hooks_mo)
 
         self.loss_computer = MatLossComputer(para)
         self.seg_loss_computer = SegLossComputer(para)
@@ -62,24 +56,17 @@ class PropagationModel:
         self._scheduler = optim.lr_scheduler.CosineAnnealingLR(
             self.optimizer, para['iterations'], eta_min=1e-7, last_epoch=-1, verbose=False)
         self.scheduler = GradualWarmupScheduler(self.optimizer, 1.0, 5000, self._scheduler)
+        
         # Logging info
         self.report_interval = 100
-        self.save_im_interval = 800#100
+        self.save_im_interval = 800
         self.save_model_interval = 20000
         if para['debug']:
             self.report_interval = self.save_im_interval = 1
         
-        if para['nb_frame_only']:
-            self.seg_pass = self.nb_seg_pass
-            self.mat_pass = self.nb_mat_pass
-        else:
-            self.seg_pass = self.far_seg_pass
-            self.mat_pass = self.far_mat_pass
+        self.seg_pass = self.far_seg_pass
+        self.mat_pass = self.far_mat_pass
 
-    def make_lr_schedular(self):
-        ''' for reseting schedular '''
-        self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode='min', factor=0.5, patience=50, min_lr=1e-7, verbose=True, cooldown=50)
-    
     def random_crop(self, *imgs):
         h, w = imgs[0].shape[-2:]
         w = random.choice(range(w // 2, w))
@@ -102,18 +89,28 @@ class PropagationModel:
         fg_mask = idx == 2
         return tran_mask*0.5 + fg_mask
 
+    @staticmethod
+    def trimap_to_3chmask(trimap):
+        # b, t, 1, h, w -> b, t, 3, h, w
+        fg = trimap > (1-1e-3)
+        bg = trimap < 1e-3
+        mask = torch.cat([fg, ~(fg|bg), bg], dim=2).float()
+        return mask
+
     def far_seg_pass(self, data):
         trimap = data['trimap']
-        gt = data['gt']
+        # gt = data['gt']
         rgb = data['rgb']
 
         # B, T, C, H, W
         T = rgb.size(1)
-        rgb_m, rgb_q = rgb.split([1, T-1], dim=1)
-        gt_m, gt_q = gt.split([1, T-1], dim=1)
+        # rgb_m, rgb_q = rgb.split([1, T-1], dim=1)
+        # gt_m, gt_q = gt.split([1, T-1], dim=1)
         
-
-        ret = self.PNet(rgb_q, rgb_m, data['mem_trimap'], segmentation_pass=True)
+        mem_tri = data['mem_trimap'] if self.random_memtrimap else trimap[:, [0]]
+        if self.split_trimap:
+            mem_tri = self.trimap_to_3chmask(mem_tri)
+        ret = self.PNet(rgb, rgb[:, [0]], mem_tri, segmentation_pass=True)
         logits = ret[0]
         out = {
             'logits': logits
@@ -123,11 +120,11 @@ class PropagationModel:
             out['extra_outs'] = ret[-1]
 
         if logits.size(1) == T:
-            data['gt_query'] = gt
+            # data['gt_query'] = gt
             data['rgb_query'] = rgb
         else:
-            data['gt_query'] = gt_q
-            data['rgb_query'] = rgb_q
+            # data['gt_query'] = gt[:, 1:]
+            data['rgb_query'] = rgb[:, 1:]
 
         if logits.size(2) == 3:
             # GFM            
@@ -155,11 +152,11 @@ class PropagationModel:
         # trimap = data['trimap']
         rgb = data['rgb'] = fg*gt + bg*(1-gt)
         # B, T, C, H, W
-        # T = rgb.size(1)
-        # rgb_m, rgb_q = rgb.split([1, T-1], dim=1)
-        # gt_m, gt_q = gt.split([1, T-1], dim=1)
 
-        ret = self.PNet(rgb, rgb[:, [0]], data['mem_trimap'], segmentation_pass=False)
+        mem_tri = data['mem_trimap'] if self.random_memtrimap else data['trimap'][:, [0]]
+        if self.split_trimap:
+            mem_tri = self.trimap_to_3chmask(mem_tri)
+        ret = self.PNet(rgb, rgb[:, [0]], mem_tri, segmentation_pass=False)
         out = {}
         
         if (isinstance(ret[-1], list) and (ret[-1][0].size(2) == 1)) \
@@ -185,59 +182,8 @@ class PropagationModel:
         return cur[:, [0] + list(range(cur.size(1)-1))]
         # return torch.cat([cur[:, [0]], cur[:, :-1]], dim=1)
 
-    def nb_mat_pass(self, data):
-        if (trimap := data.get('trimap', None)) is not None:
-            data['trimap'] = trimap
-        data['bg_num'] = 1
-        fg = data['fg']
-        bg = data['bg']
-        gt = data['gt']
-        rgb = data['rgb'] = fg*gt + bg*(1-gt)
-        # B, T, C, H, W
 
-        gt_prev = self.cur_to_prev(last_mask if ((last_mask := data.get('last_mask', None)) is not None) else gt)
-        rgb_prev = self.cur_to_prev(rgb)
-        ret = self.PNet(rgb, rgb_prev, gt_prev, segmentation_pass=False)
-        out = {}
-        if len(ret) == 4:
-            # TODO: only fit DualMattingNetwork
-            # [pha, fgr, rec, [f1, f2, f3, f4]]
-            # FG is target too
-            data['fg_query'] = fg[:, 1:] 
-            out['pred_fg'] = ret[1]
-        
-        # if ret[-1][0].size(2) == 1:
-        #     out['extra_outs'] = ret[-1]
-        
-        mask = out['mask'] = ret[0]
-        data['gt_query'] = gt
-        data['rgb_query'] = rgb
-        data['fg_query'] = fg
-    
-        return data, out
-
-    def nb_seg_pass(self, data):
-        if (trimap := data.get('trimap', None)) is not None:
-            data['trimap'] = trimap
-        gt = data['gt']
-        rgb = data['rgb']
-
-        # B, T, C, H, W
-        gt_prev = self.cur_to_prev(gt)
-        rgb_prev = self.cur_to_prev(rgb)
-        ret = self.PNet(rgb, rgb_prev, gt_prev, segmentation_pass=True)
-        logits = ret[0]
-        data['gt_query'] = gt
-        data['rgb_query'] = rgb
-        out = {
-            'logits': logits,
-            'mask': torch.sigmoid(logits),
-        }
-        # if len(ret) == 3:
-        #     out['extra_outs'] = ret[2]
-        return data, out
-
-    def do_pass(self, data, it=0, segmentation_pass=False, ckpt_dict={}):
+    def do_pass(self, data, it=0, segmentation_pass=False):
         # No need to store the gradient outside training
         torch.set_grad_enabled(self._is_train)
         
@@ -257,7 +203,7 @@ class PropagationModel:
                 if self._is_train:
                     if it % self.save_im_interval == 0 and it != 0:
                         if self.logger is not None:
-                            images = data#{**data, **out}
+                            images = data
                             size = (256, 256)
                             self.logger.log_cv2('train/pairs', pool_pairs(images, size, True), it)
 
@@ -312,9 +258,6 @@ class PropagationModel:
         print('Checkpoint saved to %s.' % checkpoint_path)
 
     def load_model(self, path, extra_keys=[]):
-        # map_location = 'cuda:%d' % self.local_rank
-        # map_location = 'cuda'
-        # checkpoint = torch.load(path, map_location={'cuda:0': map_location})
         checkpoint: dict = torch.load(path)
 
         it = checkpoint['it']
@@ -322,8 +265,7 @@ class PropagationModel:
         optimizer = checkpoint['optimizer']
         scheduler = checkpoint['scheduler']
 
-        # map_location = 'cuda:%d' % self.local_rank
-        self.PNet.load_state_dict(network)
+        self.check_and_load_model_dict(self.PNet, network)
         self.optimizer.load_state_dict(optimizer)
         self.scheduler.load_state_dict(scheduler)
         extra_dict = { k: checkpoint.get(k, None) for k in extra_keys }
@@ -333,20 +275,24 @@ class PropagationModel:
         return it, extra_dict
 
     def load_network(self, path):
-        # map_location = 'cuda:%d' % self.local_rank
-        # map_location = 'cuda'
-        src_dict = torch.load(path)#, map_location={'cuda:0': map_location})
-
-        # Maps SO weight (without other_mask) to MO weight (with other_mask)
-        # for k in list(src_dict.keys()):
-        #     if k == 'mask_rgb_encoder.conv1.weight':
-        #         if src_dict[k].shape[1] == 4:
-        #             pads = torch.zeros((64,1,7,7), device=src_dict[k].device)
-        #             nn.init.orthogonal_(pads)
-        #             src_dict[k] = torch.cat([src_dict[k], pads], 1)
-
-        self.PNet.load_state_dict(src_dict)
+        self.check_and_load_model_dict(self.PNet, torch.load(path))
+        
+        
         print('Network weight loaded:', path)
+    
+    @staticmethod
+    def check_and_load_model_dict(model: nn.Module, state_dict: dict):
+        s = 'attn.proj_out.0.'
+        for k in set(state_dict.keys()) - set(model.state_dict().keys()):
+            if s in k:
+                # new_k = 'decoder_glance.decode3.gru.attn.proj_out.0'
+                idx = k.find(s)+len(s)-2
+                new_k = k[:idx] + k[idx+2:]
+                print("rename weight:")
+                print(k, new_k)
+                state_dict[new_k] = state_dict[k]
+                state_dict.pop(k)
+        model.load_state_dict(state_dict)
 
     def train(self):
         self._is_train = True
@@ -365,4 +311,5 @@ class PropagationModel:
     def test(self):
         self._is_train = False
         self._do_log = False
-        self.PNet.e
+        self.PNet.eval()
+        return self

@@ -684,7 +684,8 @@ class GFM_FuseVM(nn.Module):
                 is_output_fg = False,
                 gru=ConvGRU,
                 fuse='GFMFuse',
-                decoder_wo_img=False
+                decoder_wo_img=False,
+                out_ch=[80, 40, 32, 16]
         ):
         super().__init__()
         assert refiner in ['fast_guided_filter', 'deep_guided_filter']
@@ -699,10 +700,11 @@ class GFM_FuseVM(nn.Module):
         self.fuse = {
             'GFMFuse': GFMFuse,
             'GFMFuse2': GFMFuse2,
+            'GFMFuse3': GFMFuse3,
         }[fuse](self.backbone.channels, ch_bottleneck)
         self.decoder_ch = decoder_ch = list(self.fuse.ch_feats_out)
         
-        self.out_ch = [80, 40, 32, 16]
+        self.out_ch = out_ch
         self.decoder_focus = RecurrentDecoder(decoder_ch, self.out_ch, gru=gru, no_img_skip=decoder_wo_img)
         self.is_output_fg = is_output_fg
         self.project_mat = Projection(self.out_ch[-1], 4 if is_output_fg else 1)
@@ -728,17 +730,6 @@ class GFM_FuseVM(nn.Module):
         # B, T, C, H, W
         num_query = query_img.size(1)
         is_refine, qimg_sm, mimg_sm, mask_sm = self._smaller_input(query_img, memory_img, memory_mask)
-        # imgs_sm = self.avgpool(qimg_sm)
-        # num_query = query_img.size(1)
-        # if is_refine := (downsample_ratio != 1):
-        #     qimg_sm = self._interpolate(query_img, scale_factor=downsample_ratio)
-        #     mimg_sm = self._interpolate(memory_img, scale_factor=downsample_ratio)
-        #     mask_sm = self._interpolate(memory_mask, scale_factor=downsample_ratio)
-        # else:
-        #     qimg_sm = query_img
-        #     mimg_sm = memory_img
-        #     mask_sm = memory_mask
-        
         
         feats_q, feats_m = self.backbone(qimg_sm, mimg_sm, mask_sm)
         feats_gl, feats_fc = self.fuse(feats_q, feats_m, mask_sm)
@@ -887,6 +878,25 @@ class GFMFuse2(nn.Module):
     @staticmethod
     def weighted_mean(x, w, keepdim=False):
         return (x*w).sum(dim=(-2, -1), keepdim=keepdim) / (w.sum(dim=(-2, -1), keepdim=keepdim) + 1e-5)
+
+class GFMFuse3(GFMGatedFuse):
+    def __init__(self, ch_feats, ch_out):
+        super().__init__(ch_feats, ch_out)
+        del self.gated_convs
+        
+    def forward(self, feats_q, feats_m, masks_m):
+        # masks = self.avgpool(masks_m)
+
+        f4_m = feats_m[3]
+        f4_q = feats_q[3]
+        f4_m, A = self.sa(f4_q, f4_m)
+
+        f4 = self.fuse(torch.cat([f4_q, f4_m], dim=2))
+        f4 = self.bottleneck(f4)
+
+        feats = list(feats_q)
+        feats[3] = f4
+        return feats, feats
 
 class PredictBG(nn.Module):
     def __init__(self, ch_in):
@@ -1105,8 +1115,25 @@ class GFM_GatedFuseVM(GFM_FuseVM):
         gru=AttnGRU, 
         fuse='GFMGatedFuse',
         decoder_wo_img=False,
+        out_ch=[]
         ):
-        super().__init__(backbone_arch, backbone_pretrained, refiner, is_output_fg, gru, decoder_wo_img=decoder_wo_img)
+        if len(out_ch) > 0:
+            super().__init__(
+                backbone_arch, 
+                backbone_pretrained, 
+                refiner, 
+                is_output_fg, 
+                gru, 
+                decoder_wo_img=decoder_wo_img,
+                out_ch=out_ch)
+        else:
+            super().__init__(
+                backbone_arch, 
+                backbone_pretrained, 
+                refiner, 
+                is_output_fg, 
+                gru, 
+                decoder_wo_img=decoder_wo_img)
         
         self.backbone = RGBEncoder(
             backbone_arch=backbone_arch, 
@@ -1115,8 +1142,24 @@ class GFM_GatedFuseVM(GFM_FuseVM):
 
         ch_bottleneck = 128
         self.fuse = {
-            'GFMGatedFuse': GFMGatedFuse
+            'GFMGatedFuse': GFMGatedFuse,
+            'sameqk': GFMGatedFuse_sameqk,
+            'samekv': GFMGatedFuse_samekv,
+            'splitstage': GFMGatedFuse_splitstage,
+            'splitfuse': GFMGatedFuse_splitfeatfuse,
+            'sameqk_head1': GFMGatedFuse_sameqk_head1,
+            'head1': GFMGatedFuse_head1,
+            'dropout': lambda *a: GFMGatedFuse(*a, dropout=0.1),
+            '3chmask': lambda *a: GFMGatedFuse(*a, ch_mask=3),
         }[fuse](self.backbone.channels, ch_bottleneck)
+
+        self.default_rec = [[None]*4]*2
+
+class GFM_GatedFuseVM_big(GFM_GatedFuseVM):
+    def __init__(self):
+        out_ch = [128, 64, 64, 32]
+        super().__init__(gru=ConvGRU, out_ch=out_ch)
+    
 
 class GFM_GatedFuseVM_4xfoucs(GFM_GatedFuseVM):
     def __init__(self, 
@@ -1124,7 +1167,7 @@ class GFM_GatedFuseVM_4xfoucs(GFM_GatedFuseVM):
         backbone_pretrained=True, 
         refiner: str = 'deep_guided_filter', 
         is_output_fg=False, 
-        gru=ConvGRU, 
+        gru=AttnGRU2,
         fuse='GFMGatedFuse'
     ):
         super().__init__(backbone_arch, backbone_pretrained, refiner, is_output_fg, gru, fuse)
@@ -1139,11 +1182,13 @@ class GFM_GatedFuseVM_4xfoucs(GFM_GatedFuseVM):
                 query_img: Tensor,
                 memory_img: Tensor,
                 memory_mask: Tensor,
-                rec_glance = [None, None, None, None],
-                rec_focus = [None],
+                rec_glance = None,
+                rec_focus = None,
                 downsample_ratio: float = 1,
                 segmentation_pass: bool = False):
-        
+        if rec_glance is None:
+            rec_glance, rec_focus = self.default_rec
+
         # B, T, C, H, W
         num_query = query_img.size(1)
         is_refine, qimg_sm, mimg_sm, mask_sm = self._smaller_input(query_img, memory_img, memory_mask, downsample_ratio)
@@ -1166,52 +1211,44 @@ class GFM_GatedFuseVM_4xfoucs(GFM_GatedFuseVM):
         rec_focus, feats = rec[:-1], rec[-1]
         out_focus = torch.sigmoid(self.project_mat(hid))
         return [out_glance, out_focus, self._collaborate(out_glance, out_focus), [rec_glance, rec_focus], feats]
+
+class GFM_GatedFuseVM_4xfoucs_1(GFM_GatedFuseVM_4xfoucs):
+    def __init__(self, 
+        backbone_arch: str = 'mobilenetv3_large_100', 
+        backbone_pretrained=True, 
+        refiner: str = 'deep_guided_filter', 
+        is_output_fg=False, 
+        gru=AttnGRU2,
+        fuse='GFMGatedFuse'
+    ):
+        super().__init__(backbone_arch, backbone_pretrained, refiner, is_output_fg, gru, fuse)
+        del self.decoder_focus
+        self.decoder_focus = RecurrentDecoder4x_1(
+            self.decoder_ch, 
+            self.out_ch[::-1]+[self.decoder_ch[-1]], 
+            self.out_ch[-1], ch_feat=32, gru=ConvGRU)
+        self.default_rec = [[None]*4, [None]*2]
+
+
+class GFM_GatedFuseVM_4xfoucs_2(GFM_GatedFuseVM_4xfoucs):
+    def __init__(self, 
+        backbone_arch: str = 'mobilenetv3_large_100', 
+        backbone_pretrained=True, 
+        refiner: str = 'deep_guided_filter', 
+        is_output_fg=False, 
+        gru=AttnGRU2,
+        fuse='GFMGatedFuse'
+    ):
+        super().__init__(backbone_arch, backbone_pretrained, refiner, is_output_fg, gru, fuse)
+        del self.decoder_focus
+        self.decoder_focus = RecurrentDecoder4x_2(
+            self.decoder_ch, 
+            self.out_ch[::-1]+[self.decoder_ch[-1]], 
+            self.out_ch[-1], ch_feat=32, gru=ConvGRU)
+        self.default_rec = [[None]*4, [None]*2]
+
+
     
-class GFMGatedFuse(nn.Module):
-    def __init__(self, ch_feats, ch_out):
-        super().__init__()
-        self.fuse = FeatureFusion3(ch_feats[-1]*2, ch_out)
-        self.bottleneck = PSP(ch_out, ch_out//4, ch_out)
-        self.sa = ConvSelfAttention(ch_feats[-1], head=2, patch_size=1, drop_p=0)
-        # self.sa = SoftCrossAttention(ch_feats[-1], hidden=16 head=2, patch_size=1, drop_p=0)
-        self.avgpool = AvgPool(num=4)
-        self.avg = nn.AvgPool2d((2, 2))
-        self.ch_feats_out = list(ch_feats)
-        self.ch_feats_out[-1] = ch_out
-        self.gated_convs = nn.ModuleList([
-            nn.Sequential(
-                GatedConv2d(ch_feats[i]+1+(ch_feats[i-1] if i > 0 else 0), ch_feats[i], 3, 1, 1),
-                nn.Conv2d(ch_feats[i], ch_feats[i], 3, 1, 1),
-                nn.LeakyReLU(0.2),
-            )
-            for i in range(4)
-        ])
-        
-        
-    def forward(self, feats_q, feats_m, masks_m):
-        masks = self.avgpool(masks_m)
-
-        f4_m = feats_m[0]
-        b, t = f4_m.shape[:2]
-        f4_m = self.gated_convs[0](torch.cat([f4_m, masks[0]], dim=2).flatten(0, 1))
-        for i in range(1, 4):
-            f4_m = torch.cat([self.avg(f4_m), feats_m[i].flatten(0, 1), masks[i].flatten(0, 1)],  dim=1)
-            f4_m = self.gated_convs[i](f4_m)
-        f4_m = f4_m.unflatten(0, (b, t))
-
-        f4_q = feats_q[3]
-        f4_m, A = self.sa(f4_q, feats_m[3], f4_m)
-
-        f4 = self.fuse(torch.cat([f4_q, f4_m], dim=2))
-        f4 = self.bottleneck(f4)
-
-        feats = list(feats_q)
-        feats[3] = f4
-        return feats, feats
-    
-    @staticmethod
-    def weighted_mean(x, w, keepdim=False):
-        return (x*w).sum(dim=(-2, -1), keepdim=keepdim) / (w.sum(dim=(-2, -1), keepdim=keepdim) + 1e-5)
 
 class BGRecurrentDecoder(nn.Module):
     def __init__(self, feature_channels, decoder_channels, gru=ConvGRU, bg_inpainting=BGInpaintingGRU):
@@ -1466,3 +1503,136 @@ class GatedVM(nn.Module):
             x = F.interpolate(x, scale_factor=scale_factor,
                 mode='bilinear', align_corners=False, recompute_scale_factor=False)
         return x
+
+class GFM_GatedFuseVM_to4xglance_4xfocus(GFM_GatedFuseVM):
+    def __init__(self, 
+        backbone_arch: str = 'mobilenetv3_large_100', 
+        backbone_pretrained=True, 
+        refiner: str = 'deep_guided_filter', 
+        is_output_fg=False, 
+        gru=AttnGRU2,
+        fuse='GFMGatedFuse'
+    ):
+        super().__init__(backbone_arch, backbone_pretrained, refiner, is_output_fg, gru, fuse)
+        del self.decoder_glance
+        del self.decoder_focus
+        del self.project_seg
+        del self.project_mat
+
+        self.out_ch = [96, 64, 48, 32]
+        # self.out_ch = [80, 40, 32, 16]
+        self.decoder_glance = RecurrentDecoderTo4x(self.decoder_ch, self.out_ch[:3], gru=gru)
+        self.is_output_fg = is_output_fg
+        self.project_seg = Projection(self.out_ch[2], 3)
+
+        self.decoder_focus = RecurrentDecoderFrom4x(
+            self.decoder_ch, 
+            self.out_ch[::-1]+[self.decoder_ch[-1]], 
+            self.out_ch[-1], ch_feat=32, gru=ConvGRU)
+        self.project_mat = Projection(self.out_ch[-1], 4 if is_output_fg else 1)
+        self.avgpool = AvgPool(3)
+        self.default_rec = [[None]*3, [None]]
+
+    def forward(self,
+                query_img: Tensor,
+                memory_img: Tensor,
+                memory_mask: Tensor,
+                rec_glance = None,
+                rec_focus = None,
+                downsample_ratio: float = 1,
+                segmentation_pass: bool = False):
+        if rec_glance is None:
+            rec_glance, rec_focus = self.default_rec
+
+        # B, T, C, H, W
+        num_query = query_img.size(1)
+        is_refine, qimg_sm, mimg_sm, mask_sm = self._smaller_input(query_img, memory_img, memory_mask, downsample_ratio)
+        imgs_sm = self.avgpool(qimg_sm)
+        
+        feats_q, feats_m = self.backbone(qimg_sm, mimg_sm, mask_sm)
+        feats_gl, feats_fc = self.fuse(feats_q, feats_m, mask_sm)
+        hid, *rec = self.decoder_glance(qimg_sm, imgs_sm[1], imgs_sm[2], feats_gl[2], feats_gl[3], *rec_glance)
+        rec_glance, feats = rec[:-1], rec[-1]
+        # print([f.shape for f in feats], self.out_ch)
+        out_glance = self.project_seg(hid)
+        if segmentation_pass:
+            return [out_glance, rec_glance]
+
+        hid, *rec = self.decoder_focus(
+            qimg_sm, imgs_sm[0], 
+            *feats_fc[:2],
+            feats[0], feats[2], *rec_focus)
+        rec_focus, feats = rec[:-1], rec[-1]
+        out_focus = torch.sigmoid(self.project_mat(hid))
+        return [out_glance, out_focus, self._collaborate(out_glance, out_focus), [rec_glance, rec_focus], feats]
+
+class GFM_GatedFuseVM_to4xglance_4xfocus_2(GFM_GatedFuseVM_to4xglance_4xfocus):
+    def __init__(self, backbone_arch: str = 'mobilenetv3_large_100', backbone_pretrained=True, refiner: str = 'deep_guided_filter', is_output_fg=False, gru=AttnGRU2, fuse='GFMGatedFuse'):
+        super().__init__(backbone_arch, backbone_pretrained, refiner, is_output_fg, gru, fuse)
+        del self.decoder_glance
+        del self.decoder_focus
+        del self.project_seg
+        del self.project_mat
+
+        self.out_ch = [96, 64, 48, 32]
+        # self.out_ch = [80, 40, 32, 16]
+        self.decoder_glance = RecurrentDecoderTo4x_2(self.decoder_ch, self.out_ch[:3], gru=gru)
+        self.is_output_fg = is_output_fg
+        self.project_seg = Projection(self.out_ch[2], 3)
+
+        self.decoder_focus = RecurrentDecoderFrom4x_2(
+            self.decoder_ch, 
+            self.out_ch[::-1]+[self.decoder_ch[-1]], 
+            self.out_ch[-1], ch_feat=32, gru=ConvGRU)
+        self.project_mat = Projection(self.out_ch[-1], 4 if is_output_fg else 1)
+        self.avgpool = AvgPool(3)
+        self.default_rec = [[None]*2, [None]*2]
+
+class GFM_GatedFuseVM_to4xglance_4xfocus_3(GFM_GatedFuseVM_to4xglance_4xfocus_2):
+    def __init__(self, backbone_arch: str = 'mobilenetv3_large_100', backbone_pretrained=True, refiner: str = 'deep_guided_filter', is_output_fg=False, gru=AttnGRU2, fuse='GFMGatedFuse'):
+        super().__init__(backbone_arch, backbone_pretrained, refiner, is_output_fg, gru, fuse)
+        del self.decoder_glance
+
+        self.decoder_glance = RecurrentDecoderTo4x_3(self.decoder_ch, self.out_ch[:3], gru=gru)
+    
+    def forward(self,
+                query_img: Tensor,
+                memory_img: Tensor,
+                memory_mask: Tensor,
+                rec_glance = None,
+                rec_focus = None,
+                downsample_ratio: float = 1,
+                segmentation_pass: bool = False):
+        if rec_glance is None:
+            rec_glance, rec_focus = self.default_rec
+
+        # B, T, C, H, W
+        num_query = query_img.size(1)
+        is_refine, qimg_sm, mimg_sm, mask_sm = self._smaller_input(query_img, memory_img, memory_mask, downsample_ratio)
+        imgs_sm = self.avgpool(qimg_sm)
+        
+        feats_q, feats_m = self.backbone(qimg_sm, mimg_sm, mask_sm)
+        feats_gl, feats_fc = self.fuse(feats_q, feats_m, mask_sm)
+        hid, *rec = self.decoder_glance(qimg_sm, imgs_sm[1], imgs_sm[2], feats_gl[2], feats_gl[3], *rec_glance)
+        rec_glance, feats = rec[:-1], rec[-1]
+        # print([f.shape for f in feats], self.out_ch)
+        out_glance = self.project_seg(hid)
+        out_glance = F.interpolate(out_glance.flatten(0, 1), size=qimg_sm.shape[-2:], mode='bilinear').unflatten(0, qimg_sm.shape[:2])
+        if segmentation_pass:
+            return [out_glance, rec_glance]
+
+        hid, *rec = self.decoder_focus(
+            qimg_sm, imgs_sm[0], 
+            *feats_fc[:2],
+            feats[0], feats[2], *rec_focus)
+        rec_focus, feats = rec[:-1], rec[-1]
+        out_focus = torch.sigmoid(self.project_mat(hid))
+        return [out_glance, out_focus, self._collaborate(out_glance, out_focus), [rec_glance, rec_focus], feats]
+
+    
+class GFM_GatedFuseVM_to4xglance_4xfocus_4(GFM_GatedFuseVM_to4xglance_4xfocus_3):
+    def __init__(self, backbone_arch: str = 'mobilenetv3_large_100', backbone_pretrained=True, refiner: str = 'deep_guided_filter', is_output_fg=False, gru=FocalGRU, fuse='GFMGatedFuse'):
+        super().__init__(backbone_arch, backbone_pretrained, refiner, is_output_fg, gru, fuse)
+
+        del self.decoder_glance
+        self.decoder_glance = RecurrentDecoderTo4x_4(self.decoder_ch, self.out_ch[:3], gru=gru)

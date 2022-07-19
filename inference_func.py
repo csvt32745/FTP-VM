@@ -19,6 +19,19 @@ class TimeStamp:
         self.last = cur
         return dif
 
+def check_and_load_model_dict(model: nn.Module, state_dict: dict):
+    s = 'attn.proj_out.0.'
+    for k in set(state_dict.keys()) - set(model.state_dict().keys()):
+        if s in k:
+            # new_k = 'decoder_glance.decode3.gru.attn.proj_out.0'
+            idx = k.find(s)+len(s)-2
+            new_k = k[:idx] + k[idx+2:]
+            print("rename weight:")
+            print(k, new_k)
+            state_dict[new_k] = state_dict[k]
+            state_dict.pop(k)
+    model.load_state_dict(state_dict)
+
 def run_inference(inference_core: InferenceCore, pred_path, gt_path, dataset):
     fps = inference_core.propagate()
     
@@ -33,16 +46,17 @@ def run_evaluation(
     inference_core_func, 
     dataset_name, dataset, dataloader,
     memory_freq=-1, memory_gt=True,
-    gt_name='GT'
+    gt_name='GT',
     ):
     print(f"=" * 30)
-    print(f"[ Current model: {model_name} ]")
+    print(f"[ Current model: {model_name}, memory freq: {memory_freq} ]")
 
     pred_path = os.path.join(root, model_name)
     gt_path = os.path.join(root, gt_name)
 
     model = model_func()
-    model.load_state_dict(torch.load(model_path))
+    # model.load_state_dict(torch.load(model_path))
+    check_and_load_model_dict(model, torch.load(model_path))
     model = model.cuda()
     
     inference_core: InferenceCore = None

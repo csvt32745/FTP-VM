@@ -40,6 +40,7 @@ import numpy as np
 import xlsxwriter
 from concurrent.futures import ThreadPoolExecutor
 from tqdm import tqdm
+from collections import defaultdict
 
 
 class Evaluator:
@@ -48,6 +49,7 @@ class Evaluator:
         num_workers=16,
         is_eval_fgr=False,
         is_fix_fgr=False,
+        is_trimap_wise=True
     ):
         # self.parse_args()
         # self.images = images
@@ -57,7 +59,8 @@ class Evaluator:
         self.true_dir = true_dir
         self.num_workers = num_workers
         self.is_fix_fgr = is_fix_fgr
-        self.metrics = ['pha_mad', 'pha_mse', 'pha_grad', 'pha_conn', 'pha_dtssd']
+        self.metrics = ['pha_mad', 'pha_sad', 'pha_mse', 'pha_grad', 'pha_conn', 'pha_dtssd']
+        self.is_trimap_wise = is_trimap_wise
         if is_eval_fgr:
             self.metrics.extend(['fgr_mad', 'fgr_mse'])
         self.init_metrics()
@@ -143,7 +146,18 @@ class Evaluator:
 
     def evaluate_worker(self, dataset, clip, position):
         framenames = sorted(os.listdir(os.path.join(self.pred_dir, dataset, clip, 'pha')))
-        metrics = {metric_name : [] for metric_name in self.metrics}
+        prefixes = ['', 'fg_', 'tran_', 'bg_']
+        if self.is_trimap_wise:
+            metrics = {}
+            for pf in prefixes:
+                for metric_name in self.metrics:
+                    if metric_name == 'pha_conn':
+                        metrics['pha_conn'] = []
+                    else:
+                        metrics[pf+metric_name] = []
+        else:
+            metrics = {metric_name : [] for metric_name in self.metrics}
+        # metrics = defaultdict(list)
         
         pred_pha_tm1 = None
         true_pha_tm1 = None
@@ -156,25 +170,66 @@ class Evaluator:
             try:
                 true_pha = cv2.imread(os.path.join(self.true_dir, dataset, true_clip, 'pha', framename), cv2.IMREAD_GRAYSCALE).astype(np.float32) / 255
                 pred_pha = cv2.imread(os.path.join(self.pred_dir, dataset, clip, 'pha', framename), cv2.IMREAD_GRAYSCALE).astype(np.float32) / 255
+                assert np.array_equal(pred_pha.shape, true_pha.shape), f"{pred_pha.shape}, {true_pha.shape}, {self.pred_dir}"
+                if self.is_trimap_wise:
+                    trimap = cv2.imread(os.path.join(self.true_dir, dataset, true_clip, 'trimap', framename), cv2.IMREAD_GRAYSCALE)
+                    assert trimap is not None
+                    fg = trimap >= 254
+                    bg = trimap <= 1
+                    trimap = [fg, ~(fg|bg), bg]
+                else:
+                    trimap = None
             except:
                 print(dataset, clip, 'pha', framename, 'not found')
                 raise
-            if 'pha_mad' in self.metrics:
-                metrics['pha_mad'].append(self.mad(pred_pha, true_pha))
-            if 'pha_mse' in self.metrics:
-                metrics['pha_mse'].append(self.mse(pred_pha, true_pha))
-            if 'pha_grad' in self.metrics:
-                metrics['pha_grad'].append(self.grad(pred_pha, true_pha))
+
             if 'pha_conn' in self.metrics:
                 metrics['pha_conn'].append(self.conn(pred_pha, true_pha))
-            if 'pha_dtssd' in self.metrics:
-                if i == 0:
-                    metrics['pha_dtssd'].append(0)
-                else:
-                    metrics['pha_dtssd'].append(self.dtssd(pred_pha, pred_pha_tm1, true_pha, true_pha_tm1))
+
+            if self.is_trimap_wise:
+                if 'pha_mad' in self.metrics:
+                    sad_mad = self.mad(pred_pha, true_pha, trimap)
+                    for j, pf in enumerate(prefixes):
+                        sad, mad = sad_mad[j]
+                        metrics[pf+'pha_sad'].append(sad)
+                        metrics[pf+'pha_mad'].append(mad)
+                if 'pha_mse' in self.metrics:
+                    mses = self.mse(pred_pha, true_pha, trimap)
+                    for j, pf in enumerate(prefixes):
+                        metrics[pf+'pha_mse'].append(mses[j])
+                if 'pha_grad' in self.metrics:
+                    grads = self.grad(pred_pha, true_pha, trimap)
+                    for j, pf in enumerate(prefixes):
+                        metrics[pf+'pha_grad'].append(grads[j])
+                
+                if 'pha_dtssd' in self.metrics:
+                    if i == 0:
+                        for pf in prefixes:
+                            metrics[pf+'pha_dtssd'].append(0)
+                    else:
+                        dtssds = self.dtssd(pred_pha, pred_pha_tm1, true_pha, true_pha_tm1, trimap, trimap_tm1)
+                        for j, pf in enumerate(prefixes):
+                            metrics[pf+'pha_dtssd'].append(dtssds[j])
+
+            else:
+                if 'pha_mad' in self.metrics:
+                    sad, mad = self.mad(pred_pha, true_pha)
+                    metrics['pha_mad'].append(mad)
+                    metrics['pha_sad'].append(sad)
+                if 'pha_mse' in self.metrics:
+                    metrics['pha_mse'].append(self.mse(pred_pha, true_pha))
+                if 'pha_grad' in self.metrics:
+                    metrics['pha_grad'].append(self.grad(pred_pha, true_pha))
+
+                if 'pha_dtssd' in self.metrics:
+                    if i == 0:
+                        metrics['pha_dtssd'].append(0)
+                    else:
+                        metrics['pha_dtssd'].append(self.dtssd(pred_pha, pred_pha_tm1, true_pha, true_pha_tm1))
                     
             pred_pha_tm1 = pred_pha
             true_pha_tm1 = true_pha
+            trimap_tm1 = trimap
             
             if 'fgr_mse' in self.metrics or 'fgr_mad' in self.metrics:
                 try:
@@ -192,22 +247,58 @@ class Evaluator:
 
         return metrics
 
-    
+
 class MetricMAD:
-    def __call__(self, pred, true):
-        return np.abs(pred - true).mean() * 1e3
+
+    @staticmethod
+    def get_result_from_diff(diff):
+        if (size := diff.size) == 0:
+            return 0, 0
+        sad = diff.sum()
+        mad = sad / size * 1e3
+        return sad, mad
+
+    def __call__(self, pred, true, trimap=None):
+        diff = np.abs(pred - true)
+        res = self.get_result_from_diff(diff)
+        if trimap is None:
+            return res
+
+        ret = [res]
+        for sel in trimap:
+            ret.append(self.get_result_from_diff(diff[sel]))
+        return ret
+        
+        # return np.abs(pred - true).mean() * 1e3
 
 
 class MetricMSE:
-    def __call__(self, pred, true):
-        return ((pred - true) ** 2).mean() * 1e3
+    def __call__(self, pred, true, trimap=None):
+        difsq = (pred - true) ** 2
+        res = difsq.mean()*1e3
+        if trimap is None:
+            return res
+
+        ret = [res]
+        for sel in trimap:
+            if sel.any():
+                ret.append(difsq[sel].mean()*1e3)
+            else:
+                ret.append(0)
+        return ret
+
+        # return ((pred - true) ** 2).mean() * 1e3
 
 
 class MetricGRAD:
     def __init__(self, sigma=1.4):
         self.filter_x, self.filter_y = self.gauss_filter(sigma)
     
-    def __call__(self, pred, true):
+    @staticmethod
+    def get_result_from_grad(grad):
+        return grad.sum() / 1000
+
+    def __call__(self, pred, true, trimap=None):
         pred_normed = np.zeros_like(pred)
         true_normed = np.zeros_like(true)
         cv2.normalize(pred, pred_normed, 1., 0., cv2.NORM_MINMAX)
@@ -216,8 +307,18 @@ class MetricGRAD:
         true_grad = self.gauss_gradient(true_normed).astype(np.float32)
         pred_grad = self.gauss_gradient(pred_normed).astype(np.float32)
 
-        grad_loss = ((true_grad - pred_grad) ** 2).sum()
-        return grad_loss / 1000
+        grad_loss = ((true_grad - pred_grad) ** 2)
+        res = self.get_result_from_grad(grad_loss)
+        if trimap is None:
+            return res
+        
+        ret = [res]
+        for sel in trimap:
+            ret.append(self.get_result_from_grad(grad_loss[sel]))
+        return ret
+
+        # grad_loss = ((true_grad - pred_grad) ** 2).sum()
+        # return grad_loss / 1000
     
     def gauss_gradient(self, img):
         img_filtered_x = cv2.filter2D(img, -1, self.filter_x, borderType=cv2.BORDER_REPLICATE)
@@ -227,7 +328,7 @@ class MetricGRAD:
     @staticmethod
     def gauss_filter(sigma, epsilon=1e-2):
         half_size = np.ceil(sigma * np.sqrt(-2 * np.log(np.sqrt(2 * np.pi) * sigma * epsilon)))
-        size = np.int(2 * half_size + 1)
+        size = int(2 * half_size + 1)
 
         # create filter in x axis
         filter_x = np.zeros((size, size))
@@ -290,13 +391,43 @@ class MetricCONN:
 
 
 class MetricDTSSD:
-    def __call__(self, pred_t, pred_tm1, true_t, true_tm1):
+
+    @staticmethod
+    def get_reuslt(diff):
+        if (size := diff.size) == 0:
+            return 0
+        diff = np.sum(diff) / size
+        diff = np.sqrt(diff)
+        return diff * 1e2
+
+    def __call__(self, pred_t, pred_tm1, true_t, true_tm1, trimap_t=None, trimap_tm1=None):
         dtSSD = ((pred_t - pred_tm1) - (true_t - true_tm1)) ** 2
-        dtSSD = np.sum(dtSSD) / true_t.size
-        dtSSD = np.sqrt(dtSSD)
-        return dtSSD * 1e2
+        res = self.get_reuslt(dtSSD)
+
+        if trimap_t is None:
+            return res
+
+        trimap = [(trimap_t[i] | trimap_tm1[i]) for i in range(3)]
+        ret = [res]
+        for sel in trimap:
+            ret.append(self.get_reuslt(dtSSD[sel]))
+        return ret
 
 
+        # dtSSD = np.sum(dtSSD) / true_t.size
+        # dtSSD = np.sqrt(dtSSD)
+        # return dtSSD * 1e2
 
 if __name__ == '__main__':
-    Evaluator()
+    import sys
+    root = sys.argv[1]
+    gt = os.path.join(root, 'GT')
+    for d in os.listdir(root):
+        p = os.path.join(root, d)
+        if d == 'GT' or not os.path.isdir(p):
+            continue
+        Evaluator(
+            p,
+            gt,
+            is_trimap_wise=True,
+        )
