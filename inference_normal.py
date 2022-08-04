@@ -5,6 +5,7 @@ parser.add_argument('--size', help='eval video size: sd, 1024, hd, 4k', default=
 parser.add_argument('--frames_per_item', help='frames in a batch', default=8, type=int)
 parser.add_argument('--n_workers', help='num workers', default=8, type=int)
 parser.add_argument('--gpu', default=0, type=int)
+parser.add_argument('--memory_bg', help='Given bg & zero-trimap as memory input', action='store_true')
 # parser.add_argument('--memory_freq', help='update memory in n frames, 0 for every frames', default=-1, type=int)
 args = parser.parse_args()
 
@@ -29,8 +30,69 @@ from inference_model_list import inference_model_list
 model_list = [
     # 'GFM_GatedFuseVM_fuse=splitfuse',
     # 'GFM_GatedFuseVM_fuse=sameqk_head1'
-    ('GFM_GatedFuseVM_4xfoucs_feedzero', 'GFM_GatedFuseVM_4xfoucs')
+    # ('GFM_GatedFuseVM_4xfoucs_feedzero', 'GFM_GatedFuseVM_4xfoucs')
+    # 'GFM_GatedFuseVM_2dtv_tempcons_weightce_512',
+    # 'GFM_GatedFuseVM_3dtvloss_weightce_512',
+    # 'GFM_GatedFuseVM_normal_celoss_480',
+    # 'GFM_GatedFuseVM_3dtvloss_480',
+    # 'GFM_GatedFuseVM_4xfoucs_focal_sameqk_head1',
+    # 'GFM_GatedFuseVM_to4xglance_4xfocus_focal_sameqk_head1',
+    # 'GFM_GatedFuseVM_to4xglance_4xfocus_3',
+    # ('GFM_GatedFuseVM_to4xglance_4xfocus_3_bgmem', 'GFM_GatedFuseVM_to4xglance_4xfocus_3'),
+    # 'GFM_GatedFuseVM_to4xglance_4xfocus_3_naivefuse',
+    # 'GFM_GatedFuseVM_to4xglance_4xfocus_3_focal',
+    # 'GFM_GatedFuseVM_to4xglance_4xfocus_3_focal_sameqk_head1',
+    # 'GFM_GatedFuseVM_to4xglance_4xfocus_3_fixtrimap',
+    # 'GFM_GatedFuseVM_to4xglance_4xfocus_4',
+    # 'GFM_GatedFuseVM_to4xglance_4xfocus_3_inputmaskonly',
+	# 'GFM_GatedFuseVM_to4xglance_4xfocus_3_random_trimap',
+	# 'GFM_GatedFuseVM_to4xglance_4xfocus_3_sameqk_head1',
+    # 'GFM_FuseVM',
+	# 'GFM_GatedFuseVM_to4xglance_4xfocus_3_convgru',
+	# 'GFM_GatedFuseVM_to4xglance_4xfocus_2',
+    # 'GFM_GatedFuseVM_to4xglance_4xfocus_3_fusefeature'
+    # 'GFM_GatedFuseVM_to4xglance_4xfocus_fixtrimap',
+	# 'GFM_GatedFuseVM_to4xglance_4xfocus_3_bn',
+	# 'GFM_GatedFuseVM_to4xglance_4xfocus_3_fixtrimap',
+	# 'GFM_GatedFuseVM_to4xglance_4xfocus_5',
+    # 'GFM_GatedFuseVM_to4xglance_4xfocus_6_sameqk_head1',
+	# 'GFM_GatedFuseVM_to4xglance_4xfocus_5_sameqk_head1',
+	# 'GFM_GatedFuseVM_to4xglance_4xfocus_3_sameqk_head1',
+    # 'GFM_GatedFuseVM_to4xglance_4xfocus_7',
+	# 'GFM_GatedFuseVM_to4xglance_4xfocus_3_sameqk_head1_convgru',
+    # 'GFM_GatedFuseVM_to4xglance_4xfocus_3_fixtrimap_firstmat',
+    # 'GFM_GatedFuseVM_to4xglance_4xfocus_3=grufuse',
+	# 'GFM_GatedFuseVM_to4xglance_4xfocus_3_fullresgate',
+	# 'GFM_GatedFuseVM_to4xglance_4xfocus_3=naive_h1sqk',
+    # 'GFM_GatedFuseVM_to4xglance_4xfocus_3_fixtrimap_ytvos',
+	# 'GFM_GatedFuseVM_to4xglance_4xfocus_3_fuse_convgru=ff2',
+	# 'GFM_GatedFuseVM_to4xglance_4xfocus_3_randtrimap',
+	# 'GFM_GatedFuseVM_to4xglance_4xfocus_3_multiobj',
+	# 'GFM_GatedFuseVM_to4xglance_4xfocus_3_sameqk_head1_convgru',
+    # 'STCNFuseMatting_fuse=naive',
+	'STCNFuseMatting_480',
+	# 'STCNFuseMatting',
+	# 'STCNFuseMatting_gru_before_fuse',
+	# 'STCNFuseMatting_fuse=fullres',
+	# 'STCNFuseMatting_randtri',
+
+	# 'STCNFuseMatting_fuse=fullgate',
+    # 'STCNFuseMatting_fuse=naive_480',
+	# 'STCNFuseMatting_fuse=intrimap_only',
+    # 'STCNFuseMatting_480_normalce',
+	# 'STCNFuseMatting_fuse=small',
+	# 'STCNFuseMatting_big',
+	# 'STCNFuseMatting_ytvos',
+	# 'STCNFuseMatting_fullres_mat',
+    # 'STCNFuseMatting_fuse=bn',
+
+    # 'STCNFuseMatting_SameDec_480',
+	# 'STCNFuseMatting_fuse=intrimap_only_fullres',
+	'STCNFuseMatting_fuse=bn_480',
+
 ]
+
+print(model_list)
 model_list = [
     [i[0]]+list(inference_model_list[i[1]][1:]) if type(i) in [tuple, list] else inference_model_list[i] 
     for i in model_list
@@ -38,7 +100,7 @@ model_list = [
 
 
 print(args)
-assert args.size in ['sd', '1024']#, 'hd', '4k']
+assert args.size in ['sd', '1024', 'hd', '4k']
 
 def get_size_name(size):
     return str(size) if type(size) == int else f'{size[1]}x{size[0]}'
@@ -49,10 +111,6 @@ trimap_width = 25
 
 # =========================
 # vm108 dataset
-
-# dataset = VM108ValidationDataset(
-#     frames_per_item=frames_per_item, mode='val', is_subset=False, 
-#     trimap_width=25, size=size)
 
 if args.size == 'sd':
     size = 256
@@ -71,7 +129,7 @@ dataset_list.append((root, dataset_name, dataset))
 
 # =========================
 # vm240k dataset
-# size = [288, 512] # H, W
+
 if args.size == '1024':
     size = [576, 1024] # H, W
     dataset = VM240KValidationDataset(
@@ -80,6 +138,32 @@ if args.size == '1024':
         frames_per_item=frames_per_item, trimap_width=trimap_width, size=-1)
     dataset_name='vm240k'
     root = dataset_name+'_val_midtri_'+get_size_name(size)
+    dataset_list.append((root, dataset_name, dataset))
+
+# =========================
+# realhuman dataset
+
+for dataset_name, realhuman in [
+    ('realhuman_allframe', RealhumanDataset_AllFrames),
+    # ('realhuman', RealhumanDataset),
+]:
+    # if args.size == 'sd':
+    #     size = 256
+    #     dataset = realhuman(
+    #         root='../dataset_mat/real_human_256',
+    #         frames_per_item=frames_per_item, size=-1)
+    if args.size == '1024':
+        size = [576, 1024] # H, W
+        dataset = realhuman(
+            root='../dataset_mat/real_human_1024',
+            frames_per_item=frames_per_item, size=-1)
+    elif args.size == 'hd':
+        size = [1080, 1920] # H, W
+        dataset = realhuman(
+            root='../dataset_mat/real_human',
+            frames_per_item=frames_per_item, size=-1)
+
+    root = dataset_name+"_"+get_size_name(size)
     dataset_list.append((root, dataset_name, dataset))
 
 # =========================
@@ -97,7 +181,7 @@ def get_dataloader(dataset):
     return loader
 
 gt_name = 'GT'
-
+print([d[1] for d in dataset_list])
 for root, dataset_name, dataset in dataset_list:
     loader = get_dataloader(dataset)
 
@@ -110,5 +194,5 @@ for root, dataset_name, dataset in dataset_list:
             model_name=model_name, model_func=model_func, model_path=model_path, 
             inference_core_func=inference_core,
             dataset_name=dataset_name, dataset=dataset, dataloader=loader, gt_name=gt_name,
-            # memory_freq=0
+            memory_bg=args.memory_bg
             )

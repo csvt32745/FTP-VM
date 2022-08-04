@@ -27,8 +27,10 @@ from STCNVM.inference_model import *
 from inference_model_list import inference_model_list
 
 model_list = [
-    'GFM_GatedFuseVM_4xfoucs_randmemtrimap',
-    'GFM_GatedFuseVM_4xfoucs',
+    'GFM_GatedFuseVM_2dtv_tempcons_weightce_512',
+    'GFM_GatedFuseVM_3dtvloss_weightce_512',
+    # 'GFM_GatedFuseVM_normal_celoss_480',
+    'GFM_GatedFuseVM_3dtvloss_480',
 ]
 model_list = [inference_model_list[i] for i in model_list]
 
@@ -37,8 +39,8 @@ print(args)
 assert args.size in ['sd', '1024']#, 'hd', '4k']
 
 # memory_freqs = [120, 240, 480]
-memory_freqs = [1]
-# memory_freqs = [30, 60, 120, 240, 480]
+# memory_freqs = [1]
+memory_freqs = [30, 60, 120, 240, 480]
 frames_per_item = args.frames_per_item
 trimap_width = 25
 
@@ -84,15 +86,15 @@ dataset_list.append((root, dataset_name, dataset))
 # =========================
 # vm240k dataset
 # size = [288, 512] # H, W
-if args.size == '1024':
-    size = [576, 1024] # H, W
-    dataset = VM240KValidationDataset(
-        root='../dataset_mat/videomatte_motion_1024',
-        # root='../dataset_mat/videomatte_motion_sd',
-        frames_per_item=frames_per_item, trimap_width=trimap_width, size=-1)
-    dataset_name='vm240k'
-    root = dataset_name+'_val_midtri_'+get_size_name(size)
-    dataset_list.append((root, dataset_name, dataset))
+# if args.size == '1024':
+#     size = [576, 1024] # H, W
+#     dataset = VM240KValidationDataset(
+#         root='../dataset_mat/videomatte_motion_1024',
+#         # root='../dataset_mat/videomatte_motion_sd',
+#         frames_per_item=frames_per_item, trimap_width=trimap_width, size=-1)
+#     dataset_name='vm240k'
+#     root = dataset_name+'_val_midtri_'+get_size_name(size)
+#     dataset_list.append((root, dataset_name, dataset))
 
 # =========================
 

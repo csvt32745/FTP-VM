@@ -45,11 +45,11 @@ def run_evaluation(
     model_name, model_func, model_path,
     inference_core_func, 
     dataset_name, dataset, dataloader,
-    memory_freq=-1, memory_gt=True,
+    memory_freq=-1, memory_gt=True, memory_bg=False,
     gt_name='GT',
     ):
     print(f"=" * 30)
-    print(f"[ Current model: {model_name}, memory freq: {memory_freq} ]")
+    print(f"[ Current model: {model_name}, memory freq: {memory_freq}, memory bg: {memory_bg} ]")
 
     pred_path = os.path.join(root, model_name)
     gt_path = os.path.join(root, gt_name)
@@ -59,7 +59,7 @@ def run_evaluation(
     check_and_load_model_dict(model, torch.load(model_path))
     model = model.cuda()
     
-    inference_core: InferenceCore = None
+    inference_core: InferenceCoreRecurrent = None
     last_data = None
     loader_iter = iter(dataloader)
     debug = 0
@@ -68,7 +68,7 @@ def run_evaluation(
     while True:
         inference_core = inference_core_func(
             model, dataset, loader_iter, last_data=last_data,
-            memory_iter=memory_freq, memory_gt=memory_gt)
+            memory_iter=memory_freq, memory_gt=memory_gt, memory_bg=memory_bg)
 
         fps.append(run_inference(inference_core, pred_path, gt_path, dataset_name))
 
