@@ -28,7 +28,7 @@ class VideoMatteDataset(Dataset):
                  bg_num=1,
                  get_bgr_phas=False,
                  random_memtrimap=False):
-        assert mode in ['train', 'test']
+        assert mode in ['train', 'val']
         self.random_memtrimap = random_memtrimap
         self.bg_num = bg_num
         self.get_bgr_phas = get_bgr_phas
@@ -129,9 +129,9 @@ class VideoMatteDataset(Dataset):
 
         if self.random_memtrimap:
             data['trimap'] = get_dilated_trimaps(phas, 17, random_kernel=False)
-            data['mem_trimap'] = get_dilated_trimaps(phas[[0]], np.random.randint(1, self.size//16)*2+1, random_kernel=True)
+            data['mem_trimap'] = get_dilated_trimaps(phas[[0]], np.random.randint(1, 16)*2+1, random_kernel=True)
         else:
-            data['trimap'] = get_dilated_trimaps(phas, np.random.randint(1, self.size//16)*2+1, random_kernel=True)
+            data['trimap'] = get_dilated_trimaps(phas, np.random.randint(1, 16)*2+1, random_kernel=True)
         
         return data
 

@@ -93,9 +93,9 @@ class ImageMatteDataset(Dataset):
         
         if self.random_memtrimap:
             data['trimap'] = get_dilated_trimaps(phas, 17, random_kernel=False)
-            data['mem_trimap'] = get_dilated_trimaps(phas[[0]], np.random.randint(1, self.size//16)*2+1, random_kernel=True)
+            data['mem_trimap'] = get_dilated_trimaps(phas[[0]], np.random.randint(1, 16)*2+1, random_kernel=True)
         else:
-            data['trimap'] = get_dilated_trimaps(phas, np.random.randint(1, self.size//16)*2+1, random_kernel=True)
+            data['trimap'] = get_dilated_trimaps(phas, np.random.randint(1, 16)*2+1, random_kernel=True)
         return data
 
     @lru_cache(maxsize=128)

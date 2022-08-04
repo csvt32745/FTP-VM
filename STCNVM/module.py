@@ -13,7 +13,7 @@ from functools import reduce
 # from .STCN.network import *
 # from .STCN.modules import *
 
-from .basic_block import ResBlock, GatedConv2d, AvgPool
+from .basic_block import ResBlock, GatedConv2d, AvgPool, FocalModulation
 from .recurrent_decoder import ConvGRU
 from . import cbam
 
@@ -41,9 +41,14 @@ class FeatureFusion2(nn.Module):
 
 
 class FeatureFusion(nn.Module):
-    def __init__(self, indim, outdim):
+    def __init__(self, indim, outdim, is_resblk=True):
         super().__init__()
-        self.block = ResBlock(indim, outdim)
+        self.block = ResBlock(indim, outdim) if is_resblk \
+            else nn.Sequential(
+                nn.Conv2d(indim, outdim, 1),
+                nn.ReLU(True),
+                nn.BatchNorm2d(outdim),
+            )
         self.attention = cbam.CBAM(outdim)
 
     def forward_single_frame(self, x):
@@ -131,8 +136,6 @@ class AlignDeformConv2d(nn.Module):
             return self.forward_time_series(*args)
         else:
             return self.forward_single_frame(*args)
-
-
 
 class ConvSelfAttention(nn.Module):
     def __init__(self, 
@@ -375,146 +378,6 @@ class PSP(nn.Module):
         else:
             return self._forward(x)
 
-class FocalModulation(nn.Module):
-    def __init__(self, dim, focal_window, focal_level, focal_factor=2, bias=True, proj_drop=0., use_postln=False):
-        super().__init__()
-
-        self.dim = dim
-        self.focal_window = focal_window
-        self.focal_level = focal_level
-        self.focal_factor = focal_factor
-        self.use_postln = use_postln
-
-        # self.q = nn.Conv2d(dim, dim, kernel_size=1, bias=bias)
-        # self.f = nn.Conv2d(dim, dim + (self.focal_level+1), kernel_size=1, bias=bias)
-        self.q = nn.Linear(dim, dim, bias=bias)
-        self.f = nn.Linear(dim, dim + (self.focal_level+1), bias=bias)
-        self.h = nn.Conv2d(dim, dim, kernel_size=1, stride=1, bias=bias)
-
-        self.act = nn.GELU()
-        self.proj = nn.Linear(dim, dim)
-        # self.proj = nn.Conv2d(dim, dim, kernel_size=1)
-        self.proj_drop = nn.Dropout(proj_drop)
-        self.focal_layers = nn.ModuleList()
-                
-        self.kernel_sizes = []
-        for k in range(self.focal_level):
-            kernel_size = self.focal_factor*k + self.focal_window
-            self.focal_layers.append(
-                nn.Sequential(
-                    nn.Conv2d(dim, dim, kernel_size=kernel_size, stride=1, 
-                    groups=dim, padding=kernel_size//2, bias=False),
-                    nn.GELU(),
-                    )
-                )              
-            self.kernel_sizes.append(kernel_size)          
-        if self.use_postln:
-            self.ln = nn.LayerNorm(dim)
-
-    def forward(self, x, v=None):
-        """
-        Args:
-            x: input features with shape of (B, C, H, W)
-        """
-        C = x.size(1)
-        x = x.permute(0, 2, 3, 1)
-        v = x if v is None else v.permute(0, 2, 3, 1)
-        
-        # pre linear projection
-        v = self.f(v).permute(0, 3, 1, 2).contiguous() # for feat aggr
-        q = self.q(x).permute(0, 3, 1, 2).contiguous()
-        ctx, self.gates = torch.split(v, (C, self.focal_level+1), 1)
-        
-        # context aggreation
-        ctx_all = 0 
-        for l in range(self.focal_level):         
-            ctx = self.focal_layers[l](ctx)
-            ctx_all = ctx_all + ctx*self.gates[:, l:l+1]
-        ctx_global = self.act(ctx.mean(2, keepdim=True).mean(3, keepdim=True))
-        ctx_all = ctx_all + ctx_global*self.gates[:,self.focal_level:]
-
-        # focal modulation
-        modulator = self.h(ctx_all)
-        out = q*modulator
-        out = out.permute(0, 2, 3, 1).contiguous()
-        if self.use_postln:
-            out = self.ln(out)
-        
-        # post linear porjection
-        out = self.proj(out)
-        out = self.proj_drop(out).permute(0, 3, 1, 2)
-        return out
-
-class CrossFocalModulation(nn.Module):
-    def __init__(self, dim, focal_window, focal_level, focal_factor=2, bias=True, proj_drop=0., use_postln=False):
-        super().__init__()
-
-        self.dim = dim
-        self.focal_window = focal_window
-        self.focal_level = focal_level
-        self.focal_factor = focal_factor
-        self.use_postln = use_postln
-
-        # self.q = nn.Conv2d(dim, dim, kernel_size=1, bias=bias)
-        # self.f = nn.Conv2d(dim, dim + (self.focal_level+1), kernel_size=1, bias=bias)
-        self.q = nn.Linear(dim, dim, bias=bias)
-        self.f = nn.Linear(dim, dim + (self.focal_level+1), bias=bias)
-        self.h = nn.Conv2d(dim, dim, kernel_size=1, stride=1, bias=bias)
-
-        self.act = nn.GELU()
-        self.proj = nn.Linear(dim, dim)
-        # self.proj = nn.Conv2d(dim, dim, kernel_size=1)
-        self.proj_drop = nn.Dropout(proj_drop)
-        self.focal_layers = nn.ModuleList()
-                
-        self.kernel_sizes = []
-        for k in range(self.focal_level):
-            kernel_size = self.focal_factor*k + self.focal_window
-            self.focal_layers.append(
-                nn.Sequential(
-                    nn.Conv2d(dim, dim, kernel_size=kernel_size, stride=1, 
-                    groups=dim, padding=kernel_size//2, bias=False),
-                    nn.GELU(),
-                    )
-                )              
-            self.kernel_sizes.append(kernel_size)          
-        if self.use_postln:
-            self.ln = nn.LayerNorm(dim)
-
-    def forward(self, x, v):
-        """
-        Args:
-            x: input features with shape of (B, C, H, W)
-        """
-        C = x.size(1)
-        x = x.permute(0, 2, 3, 1)
-        v = v.permute(0, 2, 3, 1)
-        
-        # pre linear projection
-        v = self.f(v).permute(0, 3, 1, 2).contiguous() # for feat aggr
-        q = self.q(x).permute(0, 3, 1, 2).contiguous()
-        ctx, self.gates = torch.split(v, (C, self.focal_level+1), 1)
-        
-        # context aggreation
-        ctx_all = 0 
-        for l in range(self.focal_level):         
-            ctx = self.focal_layers[l](ctx)
-            ctx_all = ctx_all + ctx*self.gates[:, l:l+1]
-        ctx_global = self.act(ctx.mean(2, keepdim=True).mean(3, keepdim=True))
-        ctx_all = ctx_all + ctx_global*self.gates[:,self.focal_level:]
-
-        # focal modulation
-        modulator = self.h(ctx_all)
-        out = q*modulator
-        out = out.permute(0, 2, 3, 1).contiguous()
-        if self.use_postln:
-            out = self.ln(out)
-        
-        # post linear porjection
-        out = self.proj(out)
-        out = self.proj_drop(out).permute(0, 3, 1, 2)
-        return out
-
 class AttnGRU(nn.Module):
     def __init__(self,
                  channels: int,
@@ -731,6 +594,34 @@ class MemoryReader(nn.Module):
         val = rearrange(val, 'b c (t h w) -> b t c h w', h=H, w=W)
         return val
 
+class GatedUnit(nn.Module):
+    def __init__(self,
+                 channels: int,
+                 kernel_size: int = 3,
+                 padding: int = 1,
+                 stride: int = 1):
+        super().__init__()
+        self.channels = channels
+        self.ih = nn.Sequential(
+            nn.Conv2d(channels * 2, channels * 2, kernel_size, padding=padding, stride=stride),
+            nn.Sigmoid()
+        )
+        self.hh = nn.Sequential(
+            nn.Conv2d(channels * 2, channels, kernel_size, padding=padding, stride=stride),
+            nn.Tanh()
+        )
+        
+    def forward_(self, x, h):
+        r, z = self.ih(torch.cat([x, h], dim=1)).split(self.channels, dim=1)
+        c = self.hh(torch.cat([x, r * h], dim=1))
+        h = (1 - z) * h + z * c
+        return h
+    
+    def forward(self, x, h):
+        if x.ndim==5:
+            return self.forward_(x.flatten(0, 1), h.flatten(0, 1)).unflatten(0, x.shape[:2])
+        return self.forward_(x, h)
+
 class GFMGatedFuse(nn.Module):
     def __init__(self, ch_feats, ch_out, dropout=0., ch_mask=1):
         super().__init__()
@@ -776,6 +667,122 @@ class GFMGatedFuse(nn.Module):
         feats[3] = f4
         return feats, feats
 
+class GFMNaiveFuse(GFMGatedFuse):
+    def __init__(self, ch_feats, ch_out, dropout=0, ch_mask=1):
+        super().__init__(ch_feats, ch_out, dropout, ch_mask)
+        del self.gated_convs
+        self.gated_convs = nn.ModuleList([
+            nn.Sequential(
+                nn.Conv2d(ch_feats[i]+ch_mask+(ch_feats[i-1] if i > 0 else 0), ch_feats[i], 3, 1, 1),
+                nn.LeakyReLU(0.2),
+                nn.Conv2d(ch_feats[i], ch_feats[i], 3, 1, 1),
+                nn.LeakyReLU(0.2),
+            )
+            for i in range(4)
+        ])
+
+class GFMNaiveFuse_h1sqk(GFMGatedFuse):
+    def __init__(self, ch_feats, ch_out, dropout=0, ch_mask=1):
+        super().__init__(ch_feats, ch_out, dropout, ch_mask)
+        del self.gated_convs
+        del self.sa
+        
+        self.sa = ConvSelfAttention(ch_feats[-1], head=1, patch_size=1, drop_p=0, same_qkconv=True)
+        self.gated_convs = nn.ModuleList([
+            nn.Sequential(
+                nn.Conv2d(ch_feats[i]+ch_mask+(ch_feats[i-1] if i > 0 else 0), ch_feats[i], 3, 1, 1),
+                nn.LeakyReLU(0.2),
+                nn.Conv2d(ch_feats[i], ch_feats[i], 3, 1, 1),
+                nn.LeakyReLU(0.2),
+            )
+            for i in range(4)
+        ])
+
+class GFMGatedFuse_fullres(GFMGatedFuse):
+    def __init__(self, ch_feats, ch_out, dropout=0, ch_mask=1):
+        super().__init__(ch_feats, ch_out, dropout, ch_mask)
+        del self.sa
+        self.sa = ConvSelfAttention(ch_feats[-1], head=1, patch_size=1, drop_p=0, same_qkconv=True)
+
+        del self.gated_convs
+        ch_gate = [3] + ch_feats
+        self.gated_convs = nn.ModuleList([
+            nn.Sequential(
+                GatedConv2d(ch_gate[i]+ch_mask+(ch_gate[i-1] if i > 0 else 0), ch_gate[i], 3, 1, 1),
+                nn.Conv2d(ch_gate[i], ch_gate[i], 3, 1, 1),
+                nn.LeakyReLU(0.2),
+            )
+            for i in range(5)
+        ])
+    
+    def forward(self, feats_q, feats_m, imgs_m, masks_m):
+        masks = self.avgpool(masks_m)
+
+        b, t = imgs_m.shape[:2]
+        f4_m = self.gated_convs[0](torch.cat([imgs_m, masks_m], dim=2).flatten(0, 1))
+        for i in range(4):
+            f4_m = torch.cat([self.avg(f4_m), feats_m[i].flatten(0, 1), masks[i].flatten(0, 1)],  dim=1)
+            f4_m = self.gated_convs[i+1](f4_m)
+        f4_m = f4_m.unflatten(0, (b, t))
+
+        f4_q = feats_q[3]
+        f4_m, A = self.sa(f4_q, feats_m[3], f4_m)
+        f4_m = self.dropout(f4_m)
+        f4 = self.fuse(torch.cat([f4_q, f4_m], dim=2))
+        f4 = self.bottleneck(f4)
+
+        feats = list(feats_q)
+        feats[3] = f4
+        return feats, feats
+
+class GFMGatedFuse_inputmaskonly(GFMGatedFuse):
+    def __init__(self, ch_feats, ch_out, dropout=0, ch_mask=1):
+        super().__init__(ch_feats, ch_out, dropout, ch_mask)
+        del self.gated_convs
+        self.gated_convs = nn.ModuleList([
+            nn.Sequential(
+                GatedConv2d(ch_feats[i]+(ch_feats[i-1] if i > 0 else ch_mask), ch_feats[i], 3, 1, 1),
+                nn.Conv2d(ch_feats[i], ch_feats[i], 3, 1, 1),
+                nn.LeakyReLU(0.2),
+            )
+            for i in range(4)
+        ])
+    
+    def forward(self, feats_q, feats_m, masks_m):
+        masks = self.avgpool(masks_m)
+
+        f4_m = feats_m[0]
+        b, t = f4_m.shape[:2]
+        f4_m = self.gated_convs[0](torch.cat([f4_m, masks[0]], dim=2).flatten(0, 1))
+        for i in range(1, 4):
+            f4_m = torch.cat([self.avg(f4_m), feats_m[i].flatten(0, 1)],  dim=1)
+            f4_m = self.gated_convs[i](f4_m)
+        f4_m = f4_m.unflatten(0, (b, t))
+
+        f4_q = feats_q[3]
+        f4_m, A = self.sa(f4_q, feats_m[3], f4_m)
+        f4_m = self.dropout(f4_m)
+        f4 = self.fuse(torch.cat([f4_q, f4_m], dim=2))
+        f4 = self.bottleneck(f4)
+
+        feats = list(feats_q)
+        feats[3] = f4
+        return feats, feats
+
+class GFMGatedFuse_bn(GFMGatedFuse):
+    def __init__(self, ch_feats, ch_out, dropout=0, ch_mask=1):
+        super().__init__(ch_feats, ch_out, dropout, ch_mask)
+        self.gated_convs = nn.ModuleList([
+            nn.Sequential(
+                GatedConv2d(ch_feats[i]+ch_mask+(ch_feats[i-1] if i > 0 else 0), ch_feats[i], 3, 1, 1),
+                # nn.Conv2d(ch_feats[i], ch_feats[i], 3, 1, 1),
+                # nn.LeakyReLU(0.2),
+                nn.BatchNorm2d(ch_feats[i])
+            )
+            for i in range(4)
+        ])
+        
+
 class GFMGatedFuse_head1(GFMGatedFuse):
     def __init__(self, ch_feats, ch_out, dropout=0.):
         super().__init__(ch_feats, ch_out, dropout=dropout)
@@ -793,6 +800,48 @@ class GFMGatedFuse_sameqk_head1(GFMGatedFuse):
         super().__init__(ch_feats, ch_out, dropout=dropout)
         del self.sa
         self.sa = ConvSelfAttention(ch_feats[-1], head=1, patch_size=1, drop_p=0, same_qkconv=True)
+
+class GFMGatedFuse_h1sqk_ff2(GFMGatedFuse):
+    def __init__(self, ch_feats, ch_out, dropout=0.):
+        super().__init__(ch_feats, ch_out, dropout=dropout)
+        del self.sa
+        self.sa = ConvSelfAttention(ch_feats[-1], head=1, patch_size=1, drop_p=0, same_qkconv=True)
+
+        del self.fuse
+        self.fuse = FeatureFusion(ch_feats[-1]*2, ch_out, is_resblk=False)
+
+class GFMGatedFuse_grufuse(GFMGatedFuse):
+    def __init__(self, ch_feats, ch_out, dropout=0.):
+        super().__init__(ch_feats, ch_out, dropout=dropout)
+        del self.sa
+        self.sa = ConvSelfAttention(ch_feats[-1], head=1, patch_size=1, drop_p=0, same_qkconv=True)
+        
+        del self.fuse
+        self.gate = GatedUnit(ch_feats[-1])
+        self.fuse = FeatureFusion(ch_feats[-1], ch_out, is_resblk=False)
+    
+    def forward(self, feats_q, feats_m, masks_m):
+        masks = self.avgpool(masks_m)
+
+        f4_m = feats_m[0]
+        b, t = f4_m.shape[:2]
+        f4_m = self.gated_convs[0](torch.cat([f4_m, masks[0]], dim=2).flatten(0, 1))
+        for i in range(1, 4):
+            f4_m = torch.cat([self.avg(f4_m), feats_m[i].flatten(0, 1), masks[i].flatten(0, 1)],  dim=1)
+            f4_m = self.gated_convs[i](f4_m)
+        f4_m = f4_m.unflatten(0, (b, t))
+
+        f4_q = feats_q[3]
+        f4_m, A = self.sa(f4_q, feats_m[3], f4_m)
+        # TODO
+        # f4 = self.fuse(torch.cat([f4_q, torch.zeros_like(f4_m)], dim=2))
+        f4 = self.gate(f4_q, f4_m)
+        f4 = self.fuse(f4)
+        f4 = self.bottleneck(f4)
+
+        feats = list(feats_q)
+        feats[3] = f4
+        return feats, feats
 
 class GFMGatedFuse_samekv(GFMGatedFuse):
     def __init__(self, ch_feats, ch_out, dropout=0.):

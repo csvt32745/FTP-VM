@@ -94,9 +94,9 @@ class YouTubeVISDataset(Dataset):
         }
         if self.random_memtrimap:
             data['trimap'] = get_dilated_trimaps(segs, 17, random_kernel=False)
-            data['mem_trimap'] = get_dilated_trimaps(segs[[0]], np.random.randint(1, self.size//16)*2+1, random_kernel=True)
+            data['mem_trimap'] = get_dilated_trimaps(segs[[0]], np.random.randint(1, 16)*2+1, random_kernel=True)
         else:
-            data['trimap'] = get_dilated_trimaps(segs, np.random.randint(1, self.size//16)*2+1, random_kernel=True)
+            data['trimap'] = get_dilated_trimaps(segs, np.random.randint(1, 16)*2+1, random_kernel=True)
         return data
     
 
@@ -136,7 +136,7 @@ class YouTubeVISAugmentation:
         # Resize
         params = transforms.RandomResizedCrop.get_params(imgs, scale=(0.8, 1), ratio=(0.9, 1.1))
         imgs = F.resized_crop(imgs, *params, (self.size, self.size), interpolation=F.InterpolationMode.BILINEAR)
-        segs = F.resized_crop(segs, *params, (self.size, self.size), interpolation=F.InterpolationMode.BILINEAR)
+        segs = F.resized_crop(segs, *params, (self.size, self.size), interpolation=F.InterpolationMode.NEAREST)
         
         # Color jitter
         imgs = self.jitter(imgs)
@@ -161,7 +161,6 @@ class YouTubeVISValidAugmentation:
             self.size = (size, size)
         
         self.resize = self.size[0] > 0
-        self.resize_mode = F.InterpolationMode.BILINEAR
         
 
     def __call__(self, imgs, segs):
@@ -172,6 +171,6 @@ class YouTubeVISValidAugmentation:
         
         # Resize
         if self.resize:
-            imgs = F.resize(imgs, self.size, interpolation=self.resize_mode)
-            segs = F.resize(segs, self.size, interpolation=self.resize_mode)
+            imgs = F.resize(imgs, self.size, interpolation=F.InterpolationMode.BILINEAR)
+            segs = F.resize(segs, self.size, interpolation=F.InterpolationMode.NEAREST)
         return imgs, segs

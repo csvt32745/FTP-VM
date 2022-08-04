@@ -72,14 +72,16 @@ for m in tqdm.tqdm(models):
     is_updated = True
 
 # %%
-if not is_updated:
-    print("No file updated, exit")
-    exit()
+# if not is_updated:
+#     print("No file updated, exit")
+#     exit()
 
 # %%
+sort_dict = lambda d: d
+# sort_dict = lambda d: dict(sorted(d.items()))
 print("Save db: ", db_path)
 print(f"{len(total_metrics_clip)} models, {len(metrics)} metrics")
-total_dict = {'avg_clip': total_metrics_clip, 'avg_frame': total_metrics_frame}
+total_dict = {'avg_clip': sort_dict(total_metrics_clip), 'avg_frame': sort_dict(total_metrics_frame)}
 with open(db_path, 'w') as f:
     json.dump(total_dict, f, indent='\t')
 
@@ -88,6 +90,24 @@ excel_path = os.path.join(excel_root, dataset+".xlsx")
 print("Save excel: ", excel_path)
 with pd.ExcelWriter(excel_path) as writer:  
     for k, df in total_dict.items():
-        pd.DataFrame(df).sort_index(ascending=False).to_excel(writer, sheet_name=k)
+        df = pd.DataFrame(df).sort_index(ascending=False)
+        df.to_excel(writer, sheet_name=k, float_format='%0.4f')
+        workbook = writer.book
+        worksheet = writer.sheets[k]
+        # num_format = workbook.add_format({
+        #     'num_format': '0.0000'
+        # })
+        # worksheet.set_row(1, 30, cell_format=num_format)
+
+        header_format = workbook.add_format({
+            'text_wrap': True,
+            'bold': True,
+            'align' : 'center',
+            'valign' : 'vcenter',
+        })
+        worksheet.set_column(0, 1000, width=20)
+        for col_num, value in enumerate(df.columns.values):
+            print(value)
+            worksheet.write(0, col_num+1, value, header_format)
 
 

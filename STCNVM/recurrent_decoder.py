@@ -4,7 +4,7 @@ from torch import nn
 from torch.nn import functional as F
 from typing import Tuple, Optional
 
-from .basic_block import AvgPool, ResBlock, GatedConv2d, UpsampleBlock
+from .basic_block import AvgPool, ResBlock, GatedConv2d, UpsampleBlock, Projection
 
 class ConvGRU(nn.Module):
     def __init__(self,
@@ -139,6 +139,8 @@ class RecurrentDecoderFrom4x(nn.Module):
         out = self.out(x0.flatten(0, 1)).unflatten(0, (b, t))
         return out, r1, [x0, x1, x2]
 
+
+
 class RecurrentDecoderTo4x_2(nn.Module):
     def __init__(self, feature_channels, decoder_channels, gru=ConvGRU):
         super().__init__()
@@ -185,22 +187,25 @@ class RecurrentDecoderTo4x_4(nn.Module):
     def __init__(self, feature_channels, decoder_channels, gru=ConvGRU):
         super().__init__()
         # self.avgpool = AvgPool()
-        # self.decode4 = GRUBottleneckBlock(feature_channels[3])
-        self.decode3 = GRUUpsamplingBlock(feature_channels[3], feature_channels[2], 3, decoder_channels[0], gru=gru)
-        # self.decode2 = GRUUpsamplingBlockWithoutSkip(decoder_channels[0], 3, decoder_channels[1], gru=gru)
-        self.decode2 = UpsampleBlock(3, decoder_channels[0], decoder_channels[1])
+        self.decode4 = GRUBottleneckBlock(feature_channels[3])
+        # self.decode3 = GRUUpsamplingBlock(feature_channels[3], feature_channels[2], 3, decoder_channels[0], gru=gru)
+        self.decode3 = UpsampleBlock(3+feature_channels[2], feature_channels[3], decoder_channels[1])
+        self.decode2 = GRUUpsamplingBlockWithoutSkip(decoder_channels[0], 3, decoder_channels[1], gru=gru)
+        # self.decode2 = UpsampleBlock(3, decoder_channels[0], decoder_channels[1])
         self.out = ResBlock(decoder_channels[1], decoder_channels[2]) 
         
     def forward(self,
                 s0: Tensor, s2: Tensor, s3: Tensor,
                 f3: Tensor, f4: Tensor,
-                r3: Optional[Tensor], r4: Optional[Tensor]):
+                r2: Optional[Tensor], r4: Optional[Tensor]):
         # s1, s2, s3 = self.avgpool(s0)
         # x4, r4 = self.decode4(f4, r4)
-        x3, r3 = self.decode3(f4, f3, s3, r3)
-        x2 = self.decode2(x3, s2)
+        x3 = self.decode3(f4, torch.cat([f3, s3], dim=2))
+        # x3, r3 = self.decode3(x4, f3, s3, r3)
+        x2, r2 = self.decode2(x3, s2, r2)
+        # x2 = self.decode2(x3, s2)
         out = self.out(x2.flatten(0, 1)).unflatten(0, x2.shape[:2])
-        return out, r3, r4, [x2, x3, f4]
+        return out, r2, r4, [x2, x3, f4]
 
 class RecurrentDecoderFrom4x_2(nn.Module):
     def __init__(self, feature_channels, ch_skips, ch_out, ch_feat=64, gru=ConvGRU):
@@ -233,6 +238,208 @@ class RecurrentDecoderFrom4x_2(nn.Module):
         # x0 = self.decode2(x1, img) # 2 -> 1
         out = self.out(x0.flatten(0, 1)).unflatten(0, (b, t))
         return out, r0, r1, [x0, x1, x2]
+
+class RecurrentDecoderFrom4x_3(nn.Module):
+    def __init__(self, feature_channels, ch_skips, ch_out, ch_feat=64, gru=ConvGRU):
+        super().__init__()
+        # self.avgpool = AvgPool()
+        # print(ch_skips)
+        self.gated_s4 = GatedConv2d(ch_skips[-1], ch_feat, 1, 1, 0)
+        self.gated_s2 = GatedConv2d(ch_skips[2], ch_feat, 1, 1, 0)
+        self.decode0 = ResBlock(feature_channels[1]+ch_feat+ch_feat, ch_feat)
+        # self.decode1 = UpsampleBlock(feature_channels[0]+3, ch_feat, ch_feat)
+        # self.decode2 = UpsampleBlock(3, ch_feat, ch_feat)
+        self.decode1 = GRUUpsamplingBlock(ch_feat, feature_channels[0], 3, ch_feat, gru=gru)
+        self.decode2 = GRUUpsamplingBlockWithoutSkip(ch_feat, 3, ch_feat, gru=gru)
+        self.out = ResBlock(ch_feat, ch_out)
+
+    def forward(self,
+                img: Tensor, img1: Tensor,
+                f1: Tensor, f2: Tensor,
+                s2: Tensor, s4: Tensor,
+                r0: Optional[Tensor], r1: Optional[Tensor]):
+        b, t = img.shape[:2]
+        # print(s4.shape, s2.shape, s0.shape)
+        s4 = F.interpolate(self.gated_s4(s4), scale_factor=(1, 4, 4), mode='nearest') # 16 -> 4
+        s2 = self.gated_s2(s2) # 4s
+        
+        x2 = self.decode0(torch.cat([f2, s2, s4], dim=2).flatten(0, 1)).unflatten(0, (b, t))
+        x1, r1 = self.decode1(x2, f1, img1, r1) # 4 -> 2
+        # x1 = self.decode1(x2, torch.cat([f1, img1], dim=2)) # 4 -> 2
+        x0, r0 = self.decode2(x1, img, r0) # 2 -> 1
+        # x0 = self.decode2(x1, img) # 2 -> 1
+        out = self.out(x0.flatten(0, 1)).unflatten(0, (b, t))
+        return out, r0, r1, [x0, x1, x2]
+
+class RecurrentDecoderFrom4x_4(nn.Module):
+    def __init__(self, feature_channels, ch_skips, ch_out, ch_feat=64, gru=ConvGRU):
+        super().__init__()
+        # self.avgpool = AvgPool()
+        # print(ch_skips)
+        # self.gated_s4 = GatedConv2d(ch_skips[-1], ch_feat, 1, 1, 0)
+        # self.gated_s2 = GatedConv2d(ch_skips[2], ch_feat, 1, 1, 0)
+        self.decode0 = ResBlock(feature_channels[1]+ch_skips[-1]+ch_skips[2], ch_feat)
+        # self.decode1 = UpsampleBlock(feature_channels[0]+3, ch_feat, ch_feat)
+        self.decode2 = UpsampleBlock(3, ch_feat, ch_feat)
+        self.decode1 = GRUUpsamplingBlock(ch_feat, feature_channels[0], 3, ch_feat, gru=gru)
+        # self.decode2 = GRUUpsamplingBlock(ch_feat, ch_feat//2, 3, ch_feat//2, gru=gru)
+        self.out = ResBlock(ch_feat, ch_out)
+
+    def forward(self,
+                img: Tensor, img1: Tensor,
+                f1: Tensor, f2: Tensor,
+                s2: Tensor, s4: Tensor,
+                r1: Optional[Tensor]):
+        b, t = img.shape[:2]
+        # print(s4.shape, s2.shape, s0.shape)
+        s4 = F.interpolate(s4, scale_factor=(1, 4, 4), mode='nearest') # 16 -> 4
+        # s2 = self.gated_s2(s2) # 4s
+        
+        x2 = self.decode0(torch.cat([f2, s2, s4], dim=2).flatten(0, 1)).unflatten(0, (b, t))
+        x1, r1 = self.decode1(x2, f1, img1, r1) # 4 -> 2
+        # x1 = self.decode1(x2, torch.cat([f1, img1], dim=2)) # 4 -> 2
+        # x0, r0 = self.decode2(x1, s0, img, r0) # 2 -> 1
+        x0 = self.decode2(x1, img) # 2 -> 1
+        out = self.out(x0.flatten(0, 1)).unflatten(0, (b, t))
+        return out, r1, [x0, x1, x2]
+
+class RecurrentDecoderFrom4x_5(nn.Module):
+    def __init__(self, feature_channels, ch_skips, ch_out, ch_feat=64, gru=ConvGRU):
+        super().__init__()
+        # self.avgpool = AvgPool()
+        # print(ch_skips)
+        self.gated_s4 = nn.Sequential(
+            nn.Conv2d(ch_skips[-1]+feature_channels[1], feature_channels[1], 3, 1, 1),
+            nn.ReLU(True),
+            nn.BatchNorm2d(feature_channels[1]),
+            nn.Conv2d(feature_channels[1], feature_channels[1], 1),
+            nn.Sigmoid()
+        )
+        self.gated_s2 = nn.Sequential(
+            nn.Conv2d(ch_skips[2]+ch_feat, ch_feat, 3, 1, 1),
+            nn.ReLU(True),
+            nn.BatchNorm2d(ch_feat),
+            nn.Conv2d(ch_feat, ch_feat, 1),
+            nn.Sigmoid()
+        )
+        self.decode0_0 = nn.Sequential(
+            ResBlock(feature_channels[1], ch_feat),
+            nn.BatchNorm2d(ch_feat),
+        )
+        self.decode0_1 = nn.Sequential(
+            ResBlock(ch_feat, ch_feat),
+            nn.BatchNorm2d(ch_feat),
+        )
+        # self.decode1 = UpsampleBlock(feature_channels[0]+3, ch_feat, ch_feat)
+        self.decode2 = UpsampleBlock(3, ch_feat, ch_feat)
+        self.decode1 = GRUUpsamplingBlock(ch_feat, feature_channels[0], 3, ch_feat, gru=gru)
+        # self.decode2 = GRUUpsamplingBlock(ch_feat, ch_feat//2, 3, ch_feat//2, gru=gru)
+        self.out = ResBlock(ch_feat, ch_out)
+
+    def forward(self,
+                img: Tensor, img1: Tensor,
+                f1: Tensor, f2: Tensor,
+                s2: Tensor, s4: Tensor,
+                r1: Optional[Tensor]):
+        bt = img.shape[:2]
+        # print(s4.shape, s2.shape, s0.shape)
+        f2 = f2.flatten(0, 1)
+        s4 = F.interpolate(s4.flatten(0, 1), scale_factor=(4, 4), mode='nearest') # 16 -> 4
+        s4 = self.gated_s4(torch.cat([f2, s4], dim=1))
+        x2 = self.decode0_0(f2*s4)
+
+        s2 = self.gated_s2(torch.cat([x2, s2.flatten(0, 1)], dim=1)) # 4s
+        x2 = self.decode0_1(x2*s2).unflatten(0, bt)
+
+        x1, r1 = self.decode1(x2, f1, img1, r1) # 4 -> 2
+        # x1 = self.decode1(x2, torch.cat([f1, img1], dim=2)) # 4 -> 2
+        # x0, r0 = self.decode2(x1, s0, img, r0) # 2 -> 1
+        x0 = self.decode2(x1, img) # 2 -> 1
+        out = self.out(x0.flatten(0, 1)).unflatten(0, bt)
+        return out, r1, [x0, x1, x2]
+
+class RecurrentDecoderFrom4x_7(nn.Module):
+    def __init__(self, feature_channels, ch_skips, ch_out, ch_feat=64, gru=ConvGRU):
+        super().__init__()
+        # self.avgpool = AvgPool()
+        # print(ch_skips)
+        self.gated_s4 = nn.Sequential(
+            nn.Conv2d(ch_skips[-1]+ch_feat, ch_feat, 3, 1, 1),
+            nn.ReLU(True),
+            nn.BatchNorm2d(ch_feat),
+            nn.Conv2d(ch_feat, ch_feat, 1),
+            nn.Sigmoid()
+        )
+        self.gated_s2 = nn.Sequential(
+            nn.Conv2d(ch_skips[2]+ch_feat, ch_feat, 3, 1, 1),
+            nn.ReLU(True),
+            nn.BatchNorm2d(ch_feat),
+            nn.Conv2d(ch_feat, ch_feat, 1),
+            nn.Sigmoid()
+        )
+        self.decode1_1 = nn.Sequential(
+            ResBlock(ch_feat, ch_feat),
+            nn.BatchNorm2d(ch_feat),
+        )
+        self.decode1_2 = nn.Sequential(
+            ResBlock(ch_feat, ch_feat),
+            nn.BatchNorm2d(ch_feat),
+        )
+        # self.decode1 = UpsampleBlock(feature_channels[0]+3, ch_feat, ch_feat)
+        self.decode2 = UpsampleBlock(3, ch_feat, ch_feat, bn=True)
+        self.decode1 = GRUBlock(feature_channels[0]+feature_channels[1]+3, ch_feat, gru=gru)
+        # self.decode2 = GRUUpsamplingBlock(ch_feat, ch_feat//2, 3, ch_feat//2, gru=gru)
+        self.out = ResBlock(ch_feat, ch_out)
+
+    def forward(self,
+                img: Tensor, img1: Tensor,
+                f1: Tensor, f2: Tensor,
+                s2: Tensor, s4: Tensor,
+                r1: Optional[Tensor]):
+        bt = img.shape[:2]
+        # print(s4.shape, s2.shape, s0.shape)
+        f2 = F.interpolate(f2.flatten(0, 1), scale_factor=(2, 2), mode='nearest') # 4 -> 2
+        x1 = torch.cat([f1, f2.unflatten(0, bt), img1], dim=2)
+        x1, r1 = self.decode1(x1, r1)
+
+        x1 = x1.flatten(0, 1)
+        s4 = F.interpolate(s4.flatten(0, 1), scale_factor=(8, 8), mode='nearest') # 16 -> 2
+        s4 = 1 + self.gated_s4(torch.cat([x1, s4], dim=1))
+        x2 = self.decode1_1(x1*s4)
+
+        s2 = F.interpolate(s2.flatten(0, 1), scale_factor=(2, 2), mode='nearest') # 4 -> 2
+        s2 = 1 + self.gated_s2(torch.cat([x2, s2], dim=1))
+        x2 = self.decode1_2(x2*s2).unflatten(0, bt)
+
+        x3 = self.decode2(x2, img) # 2 -> 1
+        out = self.out(x3.flatten(0, 1)).unflatten(0, bt)
+        return out, r1, [x3, x2, x1]
+
+class RecurrentDecoderFrom4x_6(RecurrentDecoderFrom4x_5):
+    def __init__(self, feature_channels, ch_skips, ch_out, ch_feat=64, gru=ConvGRU):
+        super().__init__(feature_channels, ch_skips, ch_out, ch_feat, gru)
+
+    def forward(self,
+                img: Tensor, img1: Tensor,
+                f1: Tensor, f2: Tensor,
+                s2: Tensor, s4: Tensor,
+                r1: Optional[Tensor]):
+        bt = img.shape[:2]
+        # print(s4.shape, s2.shape, s0.shape)
+        f2 = f2.flatten(0, 1)
+        s4 = F.interpolate(s4.flatten(0, 1), scale_factor=(4, 4), mode='nearest') # 16 -> 4
+        s4 = 1+self.gated_s4(torch.cat([f2, s4], dim=1))
+        x2 = self.decode0_0(f2*s4)
+
+        s2 = 1+self.gated_s2(torch.cat([x2, s2.flatten(0, 1)], dim=1)) # 4s
+        x2 = self.decode0_1(x2*s2).unflatten(0, bt)
+
+        x1, r1 = self.decode1(x2, f1, img1, r1) # 4 -> 2
+        # x1 = self.decode1(x2, torch.cat([f1, img1], dim=2)) # 4 -> 2
+        # x0, r0 = self.decode2(x1, s0, img, r0) # 2 -> 1
+        x0 = self.decode2(x1, img) # 2 -> 1
+        out = self.out(x0.flatten(0, 1)).unflatten(0, bt)
+        return out, r1, [x0, x1, x2]
 
 class RecurrentDecoder_(nn.Module):
     def __init__(self, feature_channels, decoder_channels):
@@ -413,9 +620,6 @@ class GRUUpsamplingBlock(nn.Module):
             nn.Conv2d(in_channels + skip_channels + src_channels, out_channels, 3, 1, 1, bias=False),
             nn.BatchNorm2d(out_channels),
             nn.ReLU(True),
-            # ResBlock(out_channels),
-            # nn.BatchNorm2d(out_channels),
-            # nn.ReLU(True),
         )
         self.gru = gru(out_channels // 2)
 
@@ -450,31 +654,27 @@ class GRUUpsamplingBlock(nn.Module):
         else:
             return self.forward_single_frame(x, f, s, r)
 
-class GRUResBlock(nn.Module):
-    def __init__(self, in_channels, skip_channels, src_channels, out_channels, gru=ConvGRU):
+class GRUBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, gru=ConvGRU):
         super().__init__()
         self.out_channels = out_channels
         self.conv = nn.Sequential(
-            nn.Conv2d(in_channels + skip_channels + src_channels, out_channels, 3, 1, 1, bias=False),
+            nn.Conv2d(in_channels, out_channels, 3, 1, 1, bias=False),
             nn.BatchNorm2d(out_channels),
             nn.ReLU(True),
         )
         self.gru = gru(out_channels // 2)
 
-    def forward_single_frame(self, x, f, s, r: Optional[Tensor]):
-        x = torch.cat([x, f, s], dim=1)
+    def forward_single_frame(self, x, r: Optional[Tensor]):
         x = self.conv(x)
         a, b = x.split(self.out_channels // 2, dim=1)
         b, r = self.gru(b, r)
         x = torch.cat([a, b], dim=1)
         return x, r
     
-    def forward_time_series(self, x, f, s, r: Optional[Tensor]):
-        B, T, _, H, W = s.shape
+    def forward_time_series(self, x, r: Optional[Tensor]):
+        B, T, _, H, W = x.shape
         x = x.flatten(0, 1)
-        f = f.flatten(0, 1)
-        s = s.flatten(0, 1)
-        x = torch.cat([x, f, s], dim=1)
         x = self.conv(x)
         x = x.unflatten(0, (B, T))
         a, b = x.split(self.out_channels // 2, dim=2)
@@ -482,11 +682,11 @@ class GRUResBlock(nn.Module):
         x = torch.cat([a, b], dim=2)
         return x, r
     
-    def forward(self, x, f, s, r: Optional[Tensor]):
+    def forward(self, x, r: Optional[Tensor]):
         if x.ndim == 5:
-            return self.forward_time_series(x, f, s, r)
+            return self.forward_time_series(x, r)
         else:
-            return self.forward_single_frame(x, f, s, r)
+            return self.forward_single_frame(x, r)
 
 class GRUUpsamplingBlockNoImg(nn.Module):
     def __init__(self, in_channels, skip_channels, src_channels, out_channels, gru=ConvGRU):
@@ -626,22 +826,4 @@ class OutputBlock(nn.Module):
             return self.forward_time_series(x, s)
         else:
             return self.forward_single_frame(x, s)
-
-class Projection(nn.Module):
-    def __init__(self, in_channels, out_channels, kernel=1, stride=1, padding=0):
-        super().__init__()
-        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=kernel, stride=stride, padding=padding)
-    
-    def forward_single_frame(self, x):
-        return self.conv(x)
-    
-    def forward_time_series(self, x):
-        B, T = x.shape[:2]
-        return self.conv(x.flatten(0, 1)).unflatten(0, (B, T))
-        
-    def forward(self, x):
-        if x.ndim == 5:
-            return self.forward_time_series(x)
-        else:
-            return self.forward_single_frame(x)
     

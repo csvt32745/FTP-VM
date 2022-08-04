@@ -373,9 +373,9 @@ class TrainFrameSampler:
         return frames
     
 class TrainFrameSamplerAddFarFrame(TrainFrameSampler):
-    def __init__(self, speed=[0.5, 1, 2, 3, 4, 5]):
+    def __init__(self, speed=[0.5, 1, 2, 3, 4, 5], far_mult=[1, 2, 4, 8, 16]):
         super().__init__(speed)
-        self.far_mult = [1, 2, 4, 8, 16]
+        self.far_mult = far_mult
 
     def __call__(self, seq_length):
         frames = super().__call__(seq_length-1)

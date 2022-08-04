@@ -143,9 +143,12 @@ class SegLossComputer:
         self.para = para
         self.bce = nn.BCEWithLogitsLoss()
         self.bsce = BootstrappedCE()
-        assert (celoss_type:=para['celoss_type']) in ['focal', 'normal']
-        self.ce = nn.CrossEntropyLoss() if celoss_type == 'normal' else FocalLoss()
-        # self.ce = FocalLoss(alpha=torch.FloatTensor([1, 3, 1])).cuda()
+        assert (celoss_type:=para['celoss_type']) in ['focal', 'normal', 'normal_weight']
+        self.ce = {
+            'focal': FocalLoss,
+            'normal': nn.CrossEntropyLoss,
+            'normal_weight': lambda: nn.CrossEntropyLoss(weight=torch.FloatTensor([1, 3, 1])).cuda(),
+        }[celoss_type]()
         self.avg2d = nn.AvgPool3d((1, 2, 2))
         self.avg2d_bg = nn.AvgPool3d((1, 4, 4))
         self.tvloss = TotalVariationLoss(para['tvloss_type']).cuda()
@@ -209,9 +212,12 @@ class MatLossComputer:
         super().__init__()
         self.para = para
         self.lapla_loss = LapLoss(max_levels=5).cuda()
-        assert (celoss_type:=para['celoss_type']) in ['focal', 'normal']
-        self.ce = nn.CrossEntropyLoss() if celoss_type == 'normal' else FocalLoss()
-        # self.ce = FocalLoss(alpha=torch.FloatTensor([1, 3, 1])).cuda()
+        assert (celoss_type:=para['celoss_type']) in ['focal', 'normal', 'normal_weight']
+        self.ce = {
+            'focal': FocalLoss,
+            'normal': nn.CrossEntropyLoss,
+            'normal_weight': lambda: nn.CrossEntropyLoss(weight=torch.FloatTensor([1, 3, 1])).cuda(),
+        }[celoss_type]()
         self.bsce = BootstrappedCE()
         self.spatial_grad = K.filters.SpatialGradient()
         self.avg2d = nn.AvgPool3d((1, 2, 2))

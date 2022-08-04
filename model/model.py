@@ -38,7 +38,7 @@ class PropagationModel:
         self.save_path = save_path
         os.makedirs(os.path.dirname(self.save_path), exist_ok=True)
         self.para.save(os.path.join(os.path.dirname(self.save_path), 'config.json'))
-        
+        self.compose_multiobj = para['compose_multiobj']
         self.split_trimap = para['split_trimap']
         self.random_memtrimap = para['random_memtrimap']
 
@@ -135,6 +135,16 @@ class PropagationModel:
 
         return data, out
 
+    @staticmethod
+    def compose_multiobj_data(fg, bg, gt):
+        # B, T, C, H, W
+        other_gt = gt[:-1]
+        bg[1:] = bg[1:] * (1-other_gt) + fg[:-1] * other_gt
+        other_gt = gt[-1]
+        bg[0] = bg[0] * (1-other_gt) + fg[-1] * other_gt
+        rgb = bg * (1-gt) + fg * gt
+        return rgb, bg
+
     def far_mat_pass(self, data):
         if (bg := data['bg']).ndim == 6:
             # for fgr with multiple bgrs
@@ -150,7 +160,12 @@ class PropagationModel:
             gt = data['gt']
 
         # trimap = data['trimap']
-        rgb = data['rgb'] = fg*gt + bg*(1-gt)
+        if self.compose_multiobj and random.random() < 0.5:
+            rgb, bg = self.compose_multiobj_data(fg, bg, gt)
+            data['rgb'] = rgb
+            data['bg'] = bg
+        else:
+            rgb = data['rgb'] = fg*gt + bg*(1-gt)
         # B, T, C, H, W
 
         mem_tri = data['mem_trimap'] if self.random_memtrimap else data['trimap'][:, [0]]

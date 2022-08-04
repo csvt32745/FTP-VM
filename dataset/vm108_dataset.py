@@ -202,7 +202,7 @@ class VM108ValidationDatasetFixFG(VM108ValidationDataset):
 class VM240KValidationDataset(Dataset):
     def __init__(self, 
         root='../dataset_mat/videomatte_motion_sd', 
-        size=-1, frames_per_item=0, trimap_width=25,
+        size=-1, frames_per_item=0, trimap_width=25, get_bgr=False
     ):
         super().__init__()
         self.trimap_width = trimap_width
@@ -211,7 +211,8 @@ class VM240KValidationDataset(Dataset):
         self.set_frames_per_item(frames_per_item)
         self.resize_mode = F.InterpolationMode.BILINEAR
         self.resize = self.size[0] > 0
-        
+        self.get_bgr = get_bgr
+
         # if self.size[0] <= 0:
         #     self.crop = lambda x: x # placeholder
         # else:
@@ -278,14 +279,24 @@ class VM240KValidationDataset(Dataset):
             trimaps = torch.stack(trimaps)
         else:
             trimaps = None
+        
+        if self.get_bgr:
+            bgs = [F.to_tensor(Image.open(os.path.join(self.root, video, 'bgr', name+".png")).copy().convert('RGB')) for name in frames]
+            bgs = torch.stack(bgs)
+        else:
+            bgs = None
+
         rgbs = torch.stack(rgbs)
         gts = torch.stack(gts)
 
         if self.resize:
             rgbs = F.resize(rgbs, self.size, interpolation=self.resize_mode)
             gts = F.resize(gts, self.size, interpolation=self.resize_mode)
+
             if trimaps is not None:
                 trimaps = F.resize(trimaps, self.size, interpolation=self.resize_mode)
+            if self.get_bgr:
+                bgs = F.resize(bgs, self.size, interpolation=self.resize_mode)
 
         # print("vm108: ", full_img.shape, fg.shape, bg.shape, gt.shape)
         data = {
@@ -294,6 +305,9 @@ class VM240KValidationDataset(Dataset):
             'trimap': get_dilated_trimaps(gts, self.trimap_width) if trimaps is None else trimaps,
             'info': info
         }
+        if self.get_bgr:
+            data['bg'] = bgs
+            
         return data
 
     def __len__(self):
@@ -301,6 +315,166 @@ class VM240KValidationDataset(Dataset):
     
     def get_num_frames(self, video):
         return self.num_frames_of_video[video]
+
+class RealhumanDataset(Dataset):
+    def __init__(self, 
+        root='../dataset_mat/real_human', 
+        size=-1, frames_per_item=0
+    ):
+        super().__init__()
+        self.root = root
+        self.size = (size, size) if type(size) == int else size
+        self.set_frames_per_item(frames_per_item)
+        self.resize_mode = F.InterpolationMode.BILINEAR
+        self.resize = self.size[0] > 0
+
+    def set_frames_per_item(self, frames_per_item):
+        self.frames_per_item = frames_per_item
+        self.prepare_frame_list()
+
+    def prepare_frame_list(self):
+        self.idx_to_vid_and_chunk = []
+        self.num_frames_of_video = {}
+        self.videos = sorted(os.listdir(os.path.join(self.root, 'alpha')))
+
+        for vid in self.videos:
+            # alpha/vid/0000.png -> 0000.png
+            frames = sorted(os.listdir(os.path.join(self.root, 'alpha', vid)))
+            if len(frames) == 0:
+                print(f"{vid} doesn't have frames! ({len(frames)})")
+                continue
+            self.num_frames_of_video[vid] = len(frames)
+
+            frames = split_frames(frames, self.frames_per_item)
+            self.idx_to_vid_and_chunk.extend(list(zip([vid]*len(frames), frames)))
+            # (vid: str, frames: [...])
+
+        self.dataset_length = len(self.idx_to_vid_and_chunk)
+        print('%d videos accepted in %s.' % (len(self.videos), self.root))
+
+    def __getitem__(self, idx):
+        # video = self.videos[idx]
+        video, frames = self.idx_to_vid_and_chunk[idx]
+        info = {}
+        info['name'] = video
+        # frames = self.frames[video]
+
+        # sample frames from a video
+        # info['frames'] = [] # Appended with actual frames
+
+        rgbs = []
+        gts = []
+        trimaps = []
+        for name in frames:
+            # img I/O
+            rgb = Image.open(os.path.join(self.root, 'image', video, name)).copy().convert('RGB')
+            gt = Image.open(os.path.join(self.root, 'alpha', video, name)).copy().convert('L')
+            trimap = Image.open(os.path.join(self.root, 'trimap', video, name)).copy().convert('L')
+            
+            rgbs.append(F.to_tensor(rgb))
+            gts.append(F.to_tensor(gt))
+            trimaps.append(F.to_tensor(trimap))
+
+        rgbs = torch.stack(rgbs)
+        gts = torch.stack(gts)
+        trimaps = torch.stack(trimaps)
+
+        if self.resize:
+            rgbs = F.resize(rgbs, self.size, interpolation=self.resize_mode)
+            gts = F.resize(gts, self.size, interpolation=self.resize_mode)
+            trimaps = F.resize(trimaps, self.size, interpolation=self.resize_mode)
+
+        data = {
+            'rgb': rgbs,
+            'gt': gts,
+            'trimap': trimaps,
+            'info': info
+        }
+
+        return data
+
+    def __len__(self):
+        return self.dataset_length
+    
+    def get_num_frames(self, video):
+        return self.num_frames_of_video[video]
+
+class RealhumanDataset_AllFrames(RealhumanDataset):
+    def __init__(self, root='../dataset_mat/real_human', size=-1, frames_per_item=0):
+        super().__init__(root, size, frames_per_item)
+    
+    def prepare_frame_list(self):
+        self.idx_to_vid_and_chunk = []
+        self.num_frames_of_video = {}
+        self.videos = sorted(os.listdir(os.path.join(self.root, 'alpha')))
+        self.annotated_list = {}
+
+        for vid in self.videos:
+            # alpha/vid/0000.png -> 0000.png
+            frames = sorted(os.listdir(os.path.join(self.root, 'image_allframe', vid)))
+            self.annotated_list[vid] = sorted(os.listdir(os.path.join(self.root, 'alpha', vid)))
+            if len(frames) == 0:
+                print(f"{vid} doesn't have frames! ({len(frames)})")
+                continue
+            self.num_frames_of_video[vid] = len(frames)
+
+            frames = split_frames(frames, self.frames_per_item)
+            self.idx_to_vid_and_chunk.extend(list(zip([vid]*len(frames), frames)))
+            # (vid: str, frames: [...])
+
+        self.dataset_length = len(self.idx_to_vid_and_chunk)
+        print('%d videos accepted in %s.' % (len(self.videos), self.root))
+
+    def __getitem__(self, idx):
+        # video = self.videos[idx]
+        video, frames = self.idx_to_vid_and_chunk[idx]
+        info = {}
+        info['name'] = video
+        annotated_list = self.annotated_list[video]
+        # frames = self.frames[video]
+
+        # sample frames from a video
+        # info['frames'] = [] # Appended with actual frames
+
+        rgbs = []
+        gts = []
+        trimaps = []
+        annot_idx = []
+        for i, name in enumerate(frames):
+            # img I/O
+            rgb = Image.open(os.path.join(self.root, 'image_allframe', video, name)).copy().convert('RGB')
+            rgbs.append(F.to_tensor(rgb))
+            
+            if name in annotated_list:
+                annot_idx.append(i)
+                gt = Image.open(os.path.join(self.root, 'alpha', video, name)).copy().convert('L')
+                trimap = Image.open(os.path.join(self.root, 'trimap', video, name)).copy().convert('L')
+                gts.append(F.to_tensor(gt))
+                trimaps.append(F.to_tensor(trimap))
+
+        rgbs = torch.stack(rgbs)
+        if len(gts) > 0:
+            gts = torch.stack(gts)
+            trimaps = torch.stack(trimaps)
+
+        if self.resize:
+            rgbs = F.resize(rgbs, self.size, interpolation=self.resize_mode)
+            if len(gts) > 0:
+                gts = F.resize(gts, self.size, interpolation=self.resize_mode)
+                trimaps = F.resize(trimaps, self.size, interpolation=self.resize_mode)
+        info['annotated'] = annot_idx
+        data = {
+            'rgb': rgbs,
+            'info': info
+        }
+        if len(gts) > 0:
+            data['gt'] = gts
+            data['trimap'] = trimaps
+        else:
+            data['gt'] = data['trimap'] = torch.Tensor([])
+            
+        return data
+
 
 def stretch_bg_frames(bg_frames, fg_len):
     # make bg has the same length as fg

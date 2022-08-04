@@ -14,6 +14,7 @@ from fastai.data.load import DataLoader as FAIDataLoader
 
 from model.model import PropagationModel
 from dataset.youtubevis import *
+from dataset.youtubevos import *
 from dataset.imagematte import *
 from dataset.videomatte import *
 from dataset.augmentation import *
@@ -49,16 +50,40 @@ logger.log_string('hyperpara', str(para))
 model = PropagationModel(para, logger=logger, 
                 save_path=path.join('saves', long_id, long_id) if long_id is not None else None).train()
 
+# Automatically search the latest model path
+def search_checkpoint(save_path, target):
+    save_models = [
+        (i, datetime.datetime.strptime(split[0], '%b%d_%H.%M.%S')) 
+        for i in os.listdir(save_path) 
+        if (target in i) and ((split := i.split("_"+target, maxsplit=1))[1] == '')
+    ]
+    
+    save_models = sorted(save_models, key=lambda x: x[1], reverse=True)
+    for s, t in save_models:
+        p = os.path.join(save_path, s)
+        ckpt_name = s+"_checkpoint.pth"
+        if ckpt_name in os.listdir(p):
+            ckpt_name = os.path.join(p, ckpt_name)
+            return ckpt_name
+    return None
+
 # Load pertrained model if needed
 seg_count = (1 - para['seg_start']) # delay start
 if seg_count < 0:
     seg_count += para['seg_cd']
 seg_iter = 0 if para['seg_start'] == 0 else 1e5 # 0 for seg initially, 1e5 for delay
-if para['load_model'] is not None:
-    total_iter, extra_dict = model.load_model(para['load_model'], ['seg_count', 'seg_iter'])
+
+if (model_path := para['load_model']) is not None or para['resume']:
+    if para['resume']:
+        print('Search model: ', para['id'])
+        model_path = search_checkpoint('saves', para['id'])
+        assert model_path is not None, 'No last model checkpoint exists!'
+        print("Latest model ckpt: ", model_path)
+    
+    total_iter, extra_dict = model.load_model(model_path, ['seg_count', 'seg_iter'])
     print('Previously trained model loaded!')
     if extra_dict['seg_count'] is not None:
-        seg_count = extra_dict['seg_count']# - 10000 + para['seg_cd']
+        seg_count = extra_dict['seg_count']
     if extra_dict['seg_iter'] is not None:
         seg_iter = extra_dict['seg_iter']
 else:
@@ -142,15 +167,25 @@ def renew_ytvis_loader(long_seq=True, nb_frame_only=False):
     size = min(352, para['size'])
     # size = para['size']
     speed = [0.5, 1, 2]
-    train_dataset = YouTubeVISDataset(
-        '../dataset_sc/YoutubeVIS/train/JPEGImages',
-        '../dataset_sc/YoutubeVIS/train/instances.json',
-        size, 
-        8 if long_seq else 8,
-        TrainFrameSampler(speed) if nb_frame_only else TrainFrameSamplerAddFarFrame(speed),
-        YouTubeVISAugmentation(size),
-        random_memtrimap=para['random_memtrimap'],
-    )
+    if para['ytvos']:
+        train_dataset = YouTubeVOSDataset(
+            '../dataset_sc/YoutubeVOS/train',
+            size, 
+            8 if long_seq else 8,
+            TrainFrameSampler(speed) if nb_frame_only else TrainFrameSamplerAddFarFrame(speed),
+            YouTubeVISAugmentation(size),
+            random_memtrimap=para['random_memtrimap'],
+        )
+    else:
+        train_dataset = YouTubeVISDataset(
+            '../dataset_sc/YoutubeVIS/train/JPEGImages',
+            '../dataset_sc/YoutubeVIS/train/instances.json',
+            size, 
+            8 if long_seq else 8,
+            TrainFrameSampler(speed) if nb_frame_only else TrainFrameSamplerAddFarFrame(speed),
+            YouTubeVISAugmentation(size),
+            random_memtrimap=para['random_memtrimap'],
+        )
     print('YTVis dataset size: ', len(train_dataset))
 
     # return construct_loader(train_dataset, batch_size=12 if long_seq else 6)
