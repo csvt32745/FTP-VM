@@ -30,10 +30,13 @@ def check_and_load_model_dict(model: nn.Module, state_dict: dict):
             print(k, new_k)
             state_dict[new_k] = state_dict[k]
             state_dict.pop(k)
+        if 'refiner' in k:
+            print('remove refiner', k)
+            state_dict.pop(k)
     model.load_state_dict(state_dict)
 
-def run_inference(inference_core: InferenceCore, pred_path, gt_path, dataset):
-    fps = inference_core.propagate()
+def run_inference(inference_core: InferenceCore, pred_path, gt_path, dataset, tmp_save_root=''):
+    fps = inference_core.propagate(tmp_save_root=os.path.join(tmp_save_root, dataset))
     
     inference_core.save_imgs(os.path.join(pred_path, dataset))
     inference_core.save_gt(os.path.join(gt_path, dataset))
@@ -46,14 +49,14 @@ def run_evaluation(
     inference_core_func, 
     dataset_name, dataset, dataloader,
     memory_freq=-1, memory_gt=True, memory_bg=False,
-    gt_name='GT',
+    gt_name='GT', downsample_ratio=1
     ):
     print(f"=" * 30)
     print(f"[ Current model: {model_name}, memory freq: {memory_freq}, memory bg: {memory_bg} ]")
 
     pred_path = os.path.join(root, model_name)
     gt_path = os.path.join(root, gt_name)
-
+    tmp_save_root = '' if downsample_ratio == 1 else pred_path+"_naive"
     model = model_func()
     # model.load_state_dict(torch.load(model_path))
     check_and_load_model_dict(model, torch.load(model_path))
@@ -68,9 +71,9 @@ def run_evaluation(
     while True:
         inference_core = inference_core_func(
             model, dataset, loader_iter, last_data=last_data,
-            memory_iter=memory_freq, memory_gt=memory_gt, memory_bg=memory_bg)
-
-        fps.append(run_inference(inference_core, pred_path, gt_path, dataset_name))
+            memory_iter=memory_freq, memory_gt=memory_gt, memory_bg=memory_bg, downsample_ratio=downsample_ratio)
+        
+        fps.append(run_inference(inference_core, pred_path, gt_path, dataset_name, tmp_save_root))
 
         # load next batch
         if inference_core.is_vid_overload:
@@ -96,8 +99,15 @@ def run_evaluation(
     Evaluator(
         pred_dir=pred_path,
         true_dir=gt_path,
-        num_workers=8, is_eval_fgr=False, is_fix_fgr=False
+        num_workers=4, is_eval_fgr=False, is_fix_fgr=False
     )
+    if tmp_save_root != '':
+        print("Evalutate native downsample")
+        Evaluator(
+            pred_dir=tmp_save_root,
+            true_dir=gt_path,
+            num_workers=4, is_eval_fgr=False, is_fix_fgr=False
+        )   
     print(f"[ Computer score time: {ts.count()} ]")
     print(f"[ Inference GPU FPS: {np.mean(fps)} ]")
 

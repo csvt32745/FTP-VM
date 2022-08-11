@@ -10,6 +10,9 @@ class HyperParameters():
         parser.add_argument('--which_model', help='Use which model', default='NULL')
         parser.add_argument('--tvloss_type', help='Loss type of total variation', default='3d_seg', type=str)
         parser.add_argument('--celoss_type', help='Loss type of cross entropy: [focal, normal]', default='focal', type=str)
+        parser.add_argument('--lambda_segtv', help='lambda of segmentation consistency(total variation loss)', default=10, type=float)
+        parser.add_argument('--start_segtv', help='start iteration of segmentation consistency(total variation loss)', default=-1, type=int)
+        
         parser.add_argument('--split_trimap', help='split 1ch-trimap into 3ch masks', action='store_true')
         parser.add_argument('--compose_multiobj', help='fuse other fgs into bgs in the batch', action='store_true')
         parser.add_argument('--ytvos', help='use YTVOS dataset intead of VIS for segmentation training', action='store_true')
@@ -23,6 +26,8 @@ class HyperParameters():
         parser.add_argument('--size', help='dataset img size', default=256, type=int)
 
         # Generic learning parameters
+        parser.add_argument('--seglabel_by_alpha', help='Use alpha mask instead of trimap to get the GT of trimap seg', action='store_true')
+
         parser.add_argument('--long_seq', help='Adjust seq length and batch size', action='store_true', default=False)
 
         parser.add_argument('--iter_switch_dataset', help='switch to vid dataset at which epoch', type=int, default=5)

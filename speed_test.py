@@ -17,7 +17,7 @@ class InferenceSpeedTest:
         parser = argparse.ArgumentParser()
         parser.add_argument('--model_name', type=str, required=True)
         parser.add_argument('--resolution', type=int, nargs=2, default=[512, 512])
-        # parser.add_argument('--downsample-ratio', type=float, required=True)
+        parser.add_argument('--downsample-ratio', type=float, default=1)
         parser.add_argument('--precision', type=str, default='float32')
         parser.add_argument('--disable-refiner', action='store_true')
         parser.add_argument('--gpu', type=int, default=0)
@@ -29,8 +29,8 @@ class InferenceSpeedTest:
         self.device = f'cuda'
         # self.device = f'cuda:{self.args.gpu}'
         self.precision = {'float32': torch.float32, 'float16': torch.float16}[self.args.precision]
-        # self.model = get_model_by_string(self.args.model_name)()
-        self.model = STCNFuseMatting()
+        self.model = get_model_by_string(self.args.model_name)()
+        # self.model = STCNFuseMatting()
         self.model = self.model.to(device=self.device, dtype=self.precision).eval()
         # self.model = torch.jit.script(self.model)
         # self.model = torch.jit.freeze(self.model)
@@ -47,6 +47,7 @@ class InferenceSpeedTest:
         mimg = torch.randn((1, 1, 3, h, w), device=self.device, dtype=self.precision)
         mask = torch.randn((1, 1, 1, h, w), device=self.device, dtype=self.precision)
         N = 1000
+        downsample_ratio = self.args.downsample_ratio
         with torch.no_grad():
             if 'default_rec' in dir(self.model):
                 rec = self.model.default_rec
@@ -56,12 +57,12 @@ class InferenceSpeedTest:
                 # rec = [rec, [None]]
             print(rec)
             # mk, mv = self.model.encode_imgs_to_value(mimg, mask)
-            rec = self.model(qimg, mimg, mask, *rec)[-2]
+            rec = self.model(qimg, mimg, mask, *rec, downsample_ratio=downsample_ratio)[-2]
 
             t = time()
             for _ in tqdm(range(N)):
                 # rec = self.model.forward_with_memory(qimg, mk, mv, *rec)[-2]
-                rec = self.model(qimg, mimg, mask, *rec)[-2]
+                rec = self.model(qimg, mimg, mask, *rec, downsample_ratio=downsample_ratio)[-2]
                 torch.cuda.synchronize()
             t = time()-t
         print("FPS: ", N / t)

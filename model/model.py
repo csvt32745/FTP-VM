@@ -307,6 +307,9 @@ class PropagationModel:
                 print(k, new_k)
                 state_dict[new_k] = state_dict[k]
                 state_dict.pop(k)
+            if 'refiner' in k:
+                print('remove ', k)
+                state_dict.pop(k)
         model.load_state_dict(state_dict)
 
     def train(self):

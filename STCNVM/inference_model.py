@@ -18,12 +18,13 @@ import mediapy as media
 
 class InferenceCore:
     def __init__(self, 
-        model, dataset:VM108ValidationDataset, loader_iter, pad=16, last_data=None
+        model, dataset:VM108ValidationDataset, loader_iter, pad=16, last_data=None, downsample_ratio=1.
     ):
 
         self.model = model.eval()
         self.dataset = dataset
         self.loader_iter = loader_iter
+        self.downsample_ratio = downsample_ratio
         # self.batch_size = dataloader.batch_size
         info, images, gts, fgs, bgs, trimaps = self.request_data_from_loader(last_data)
         self.name = info['name'][0]
@@ -99,7 +100,6 @@ class InferenceCore:
     def tensor_repeat_indices(self, tensor: torch.Tensor,):
         assert self.partial_annot
         idx = torch.LongTensor(self.annotated + [tensor.shape[0]])
-        print(idx)
         return torch.repeat_interleave(tensor[self.annotated], idx[1:]-idx[:-1], dim=0)
 
     def pad_imgs(self, imgs):
@@ -179,11 +179,26 @@ class InferenceCore:
     def unpad_downsample(self, imgs, target_width=512):
         # t, c, h, w
         imgs = self.unpad_imgs(imgs)
-        h, w = imgs.shape[-2:]
-        if w < target_width:
+        # h, w = imgs.shape[-2:]
+        h, w = self.h, self.w
+        if self.downsample_ratio == 1 and w < target_width:
             return imgs
         h = int(h*target_width/w)
         return F.interpolate(imgs, size=(h, target_width), mode='bilinear')
+
+
+    def save_naive_upsampled_imgs(self, path, imgs, start, end):
+        assert imgs.ndim == 4 # t c h w
+        name = self.name.replace('/', '_')
+        # print(f"Save naive upsampled imgs: {path}, {name} ")
+        # save masks
+        pha_path = os.path.join(path, name, 'pha')
+        os.makedirs(pha_path, exist_ok=True)
+        imgs = self.unpad_imgs(imgs[:, 0]).numpy() # T, H, W
+        for i, n in enumerate(range(start, end)):
+            media.write_image(os.path.join(pha_path, f'{n:04d}.png'), imgs[i])
+            
+        return
 
     def save_imgs(self, path):
         name = self.name.replace('/', '_')
@@ -353,8 +368,9 @@ class InferenceCoreRecurrent(InferenceCore):
         memory_iter=-1,
         disable_recurrent=False,
         memory_bg=False,
+        downsample_ratio=1,
     ):
-        super().__init__(model, dataset, loader_iter, pad, last_data)
+        super().__init__(model, dataset, loader_iter, pad, last_data, downsample_ratio=downsample_ratio)
         self.disable_recurrent = disable_recurrent
         self.model = model
         self.gru_mems = [None] * 4
@@ -368,9 +384,10 @@ class InferenceCoreRecurrent(InferenceCore):
             else dataset.frames_per_item if memory_iter == 1 \
             else 1e7
         self.save_bg = False
+        self.downsample_ratio = downsample_ratio
     
     def _forward(self, query_imgs, memory_img, memory_mask):
-        ret = self.model.forward(query_imgs, memory_img, memory_mask, *self.gru_mems)
+        ret = self.model.forward(query_imgs, memory_img, memory_mask, *self.gru_mems, downsample_ratio=self.downsample_ratio)
         if self.disable_recurrent:
             pha, _ = ret[:2]
         else:
@@ -390,25 +407,7 @@ class InferenceCoreRecurrent(InferenceCore):
                 self.bgs = torch.cat([self.bgs, bg[0, :, :3].cpu()], 0)
         return pha
 
-    def _forward_fg(self, query_imgs, memory_img, memory_mask):
-        ret = self.model.forward(query_imgs, memory_img, memory_mask, *self.gru_mems)
-        if self.disable_recurrent:
-            pha, fgr, _ = ret[:3]
-        else:
-            pha, fgr, self.gru_mems = ret[:3]
-        bg = ret[-1]
-        self.save_bg = self.save_bg or (isinstance(bg, torch.Tensor) and (bg.size(2) in [3, 4]))
-        if pha.size(2) > 1:
-            pha = pha[:, :, [0]]
-        if self.masks is None:
-            self.masks = pha[0].cpu()
-            self.fgs = fgr[0].cpu()
-        else:
-            self.masks = torch.cat([self.masks, pha[0].cpu()], 0)
-            self.fgs = torch.cat([self.fgs, fgr[0].cpu()], 0)
-        return pha, fgr
-
-    def propagate(self, frame_idx=0, end_idx=-1, mask=None, mask_idx=None):
+    def propagate(self, frame_idx=0, end_idx=-1, mask=None, mask_idx=None, tmp_save_root=''):
         if end_idx < 0:
             end_idx = self.total_frames
         
@@ -444,6 +443,9 @@ class InferenceCoreRecurrent(InferenceCore):
             time_start = time()
             out = self.forward(rgb, mem_rgb, mem_mask)
             total_time += time()-time_start
+            
+            if self.downsample_ratio != 1 and tmp_save_root != '':
+                self.save_naive_upsampled_imgs(tmp_save_root, self.model.tmp_out_collab[0].cpu(), start, end)
 
             frame_count += (end-start)
             self.current_out_t = end
@@ -460,8 +462,8 @@ class InferenceCoreRecurrent(InferenceCore):
         return self.gt_bgs[idx] if self.memory_bg else self.images[idx]
 
 class InferenceCoreRecurrentGFM(InferenceCoreRecurrent):
-    def __init__(self, model: DualMattingNetwork, dataset: VM108ValidationDataset, loader_iter, pad=16, last_data=None, memory_gt=False, memory_iter=False, memory_bg=False,):
-        super().__init__(model, dataset, loader_iter, pad, last_data, memory_gt, memory_iter, memory_bg=False,)
+    def __init__(self, model: DualMattingNetwork, dataset: VM108ValidationDataset, loader_iter, pad=16, last_data=None, memory_gt=False, memory_iter=False, memory_bg=False, downsample_ratio=1.):
+        super().__init__(model, dataset, loader_iter, pad, last_data, memory_gt, memory_iter, memory_bg=memory_bg, downsample_ratio=downsample_ratio)
 
         self.glance_outs = None
         self.focus_outs = None
@@ -470,7 +472,7 @@ class InferenceCoreRecurrentGFM(InferenceCoreRecurrent):
             self.gru_mems = model.default_rec
 
     def _forward(self, query_imgs, memory_img, memory_mask):
-        glance, focus, pha, gru_mems, bg = self.model.forward(query_imgs, memory_img, memory_mask, *self.gru_mems)
+        glance, focus, pha, gru_mems, bg = self.model.forward(query_imgs, memory_img, memory_mask, *self.gru_mems, downsample_ratio=self.downsample_ratio)
         if not self.disable_recurrent:
             self.gru_mems = gru_mems
         # print(self.gru_mems)

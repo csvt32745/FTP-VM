@@ -152,6 +152,8 @@ class SegLossComputer:
         self.avg2d = nn.AvgPool3d((1, 2, 2))
         self.avg2d_bg = nn.AvgPool3d((1, 4, 4))
         self.tvloss = TotalVariationLoss(para['tvloss_type']).cuda()
+        self.lambda_tvloss = para['lambda_segtv']
+        self.start_tvloss = para['start_segtv']
 
     def compute(self, data, it):
          # logit
@@ -159,17 +161,20 @@ class SegLossComputer:
         logits = data['logits']
         # mask = data['mask']
         
-        # if (size:= logits.size(2)) == 3:
+        if (size:= logits.size(2)) == 3:
             # GFM
-        label = get_label_from_trimap(data['trimap'])
-        losses['seg_bce'] = self.gfm_loss(it, logits, label)
-        losses['seg_tv'] = self.tvloss(logits, label)*10
+            label = get_label_from_trimap(data['trimap'])
+            losses['seg_bce'] = self.gfm_loss(it, logits, label)
+            if it >= self.start_tvloss:
+                losses['seg_tv'] = self.tvloss(logits, label)*self.lambda_tvloss
             
-            # losses['total_loss'] = sum(losses.values())
-            # return data, losses
-        # elif size == 1:
-        #     gt = data['gt_query']
-        #     losses['seg_bce'] = self.bce(logits, gt)
+            losses['total_loss'] = sum(losses.values())
+            return data, losses
+
+        elif size == 1:
+            gt = data['gt_query']
+            # label = get_label_from_trimap(data['trimap'])
+            losses['seg_bce'] = self.bce(logits, gt)
 
         # BG predict
         # if (bg_out:=get_extra_outs(data, 'extra_outs', [3, 4])) is not None:
@@ -223,6 +228,8 @@ class MatLossComputer:
         self.avg2d = nn.AvgPool3d((1, 2, 2))
         self.avg2d_bg = nn.AvgPool3d((1, 4, 4))
         self.tvloss = TotalVariationLoss(para['tvloss_type']).cuda()
+        self.lambda_tvloss = para['lambda_segtv']
+        self.start_tvloss = para['start_segtv']
 
     @staticmethod
     def unpack_data_with_bgnum(data: dict, key):
@@ -237,34 +244,34 @@ class MatLossComputer:
         # trimap = data['trimap']
         losses = {}
         
-        if (bg_out:=get_extra_outs(data, 'extra_outs', [3, 4])) is not None:
-            gt_mask_x4 = self.avg2d_bg(gt_mask)
-            if bg_out.size(2) == 4:
-                bg_out, coarse_mask = bg_out.split([3, 1], dim=2)
-                losses['coarse_mask_l1'] = L1_mask(coarse_mask, gt_mask_x4)*0.5
-                data['coarse_mask'] = coarse_mask
-            bg_pha = torch.cumsum(1-self.avg2d_bg(data['bgr_pha']), dim=0).clamp(0, 1)
-            weight = (1+gt_mask_x4[:, 1:])*bg_pha
-            losses['bg_l1'] = L1_mask(bg_out[:, 1:], self.avg2d_bg(data['bg'][:, 1:]), mask=weight)*0.05
-            data['pred_bg'] = bg_out
+        # if (bg_out:=get_extra_outs(data, 'extra_outs', [3, 4])) is not None:
+        #     gt_mask_x4 = self.avg2d_bg(gt_mask)
+        #     if bg_out.size(2) == 4:
+        #         bg_out, coarse_mask = bg_out.split([3, 1], dim=2)
+        #         losses['coarse_mask_l1'] = L1_mask(coarse_mask, gt_mask_x4)*0.5
+        #         data['coarse_mask'] = coarse_mask
+        #     bg_pha = torch.cumsum(1-self.avg2d_bg(data['bgr_pha']), dim=0).clamp(0, 1)
+        #     weight = (1+gt_mask_x4[:, 1:])*bg_pha
+        #     losses['bg_l1'] = L1_mask(bg_out[:, 1:], self.avg2d_bg(data['bg'][:, 1:]), mask=weight)*0.05
+        #     data['pred_bg'] = bg_out
 
         if 'collab' in data:
             losses.update(self.gfm_loss(it, data, gt_mask))
             losses['total_loss'] = sum(losses.values())
             return data, losses
 
-        if 'pred_fg' in data:
-            # losses.update(
-            #     self.matting_loss(mask, gt_mask, data['pred_fg'], data['fg_query'], 
-            #         feats=self.unpack_data_with_bgnum(data, 'feats'))
-            # )# if it >= 60000 else None) # TODO
-            losses.update(
-                self.matting_loss(it, mask, gt_mask, data['pred_fg'], data['fg_query']
-                    )
-                    # feats=self.unpack_data_with_bgnum(data, 'feats'))
-            )# if it >= 60000 else None) # TODO
-        else:
-            losses.update(self.matting_loss(it, mask, gt_mask))#, data['fg'], data['bg'], data['rgb'])
+        # if 'pred_fg' in data:
+        #     # losses.update(
+        #     #     self.matting_loss(mask, gt_mask, data['pred_fg'], data['fg_query'], 
+        #     #         feats=self.unpack_data_with_bgnum(data, 'feats'))
+        #     # )# if it >= 60000 else None) # TODO
+        #     losses.update(
+        #         self.matting_loss(it, mask, gt_mask, data['pred_fg'], data['fg_query']
+        #             )
+        #             # feats=self.unpack_data_with_bgnum(data, 'feats'))
+        #     )# if it >= 60000 else None) # TODO
+        # else:
+        losses.update(self.matting_loss(it, mask, gt_mask))#, data['fg'], data['bg'], data['rgb'])
         
         losses['total_loss'] = sum(losses.values())
         return data, losses
@@ -278,7 +285,8 @@ class MatLossComputer:
         # loss['seg_bce'] = self.bsce(logits.flatten(0, 1), label.flatten(0, 1), it)
         loss['seg_bce'] = self.ce(logits.flatten(0, 1), label.flatten(0, 1))
         # loss['seg_bce'], target = self.fce(logits, trimap, True) # return target = True
-        loss['seg_tv'] = self.tvloss(logits, label)*10
+        if it >= self.start_tvloss:
+            loss['seg_tv'] = self.tvloss(logits, label)*self.lambda_tvloss
 
         # for k, v in self.alpha_loss(data['focus'], gt_mask, mask=target[:, :, [1]]).items():
         for k, v in self.alpha_loss(data['focus'], gt_mask, mask=(label==1).unsqueeze(2)).items():
@@ -559,9 +567,7 @@ class TotalVariationLoss(nn.Module):
                 dim=2)
         
         diff_gt_valid = (gt1 != gt2)  # torch.uint8
-        kernel = self.kernel
-        diff_gt_valid_dil = K.morphology.dilation(diff_gt_valid.float(), kernel=kernel, border_value=0)
-        diff_gt_valid_dil = K.morphology.dilation(diff_gt_valid_dil, kernel=kernel, border_value=0)<1e-5
+        diff_gt_valid_dil = self.dilation(diff_gt_valid)
         inconsistencies = diff_pred_valid * (diff_gt_valid_dil)
         return inconsistencies.mean()
 
@@ -570,10 +576,6 @@ class TotalVariationLoss(nn.Module):
         # output = output.transpose(0, 1) # t, b, ...
         # target = target.transpose(0, 1) # t, b, ...
         
-        kernel = self.kernel
-        def dilation(mask):
-            ret = K.morphology.dilation(mask.float(), kernel=kernel, border_value=0)
-            return K.morphology.dilation(ret, kernel=kernel, border_value=0)<1e-5
 
         def weighted_avg(x, m):
             return (x*m).sum() / (m.sum() + 1e-5)
@@ -587,7 +589,7 @@ class TotalVariationLoss(nn.Module):
         right_pred_mask = right_pred[:, :-1] | right_pred[:, 1:]
         diff_pred = torch.abs(output[:, :-1] - output[:, 1:]) 
         diff_pred_true = torch.gather(diff_pred, dim=2, index=target_select[:, :-1]).squeeze(dim=2)
-        mask = right_pred_mask.to(dtype=output.dtype) * dilation(target[:, :-1] != target[:, 1:])
+        mask = right_pred_mask.to(dtype=output.dtype) * self.dilation(target[:, :-1] != target[:, 1:])
         # t = diff_pred_true * mask
         t = weighted_avg(diff_pred_true, mask)
 
@@ -595,7 +597,7 @@ class TotalVariationLoss(nn.Module):
         right_pred_mask = right_pred[..., :-1, :] | right_pred[..., 1:, :]
         diff_pred = torch.abs(output[..., :-1, :] - output[..., 1:, :]) 
         diff_pred_true = torch.gather(diff_pred, dim=2, index=target_select[..., :-1, :]).squeeze(dim=2)
-        mask = right_pred_mask.to(dtype=output.dtype) * dilation(target[..., :-1, :] != target[..., 1:, :])
+        mask = right_pred_mask.to(dtype=output.dtype) * self.dilation(target[..., :-1, :] != target[..., 1:, :])
         # w = diff_pred_true * mask
         w = weighted_avg(diff_pred_true, mask)
 
@@ -604,7 +606,7 @@ class TotalVariationLoss(nn.Module):
         diff_pred = torch.abs(output[..., :-1] - output[..., 1:]) 
         diff_pred_true = torch.gather(diff_pred, dim=2, index=target_select[..., :-1]).squeeze(dim=2)
         # print(diff_pred_true.shape, right_pred_mask.shape, target[..., :-1].shape)
-        mask = right_pred_mask.to(dtype=output.dtype) * dilation(target[..., :-1] != target[..., 1:])
+        mask = right_pred_mask.to(dtype=output.dtype) * self.dilation(target[..., :-1] != target[..., 1:])
         # h = diff_pred_true * mask
         h = weighted_avg(diff_pred_true, mask)
 
@@ -620,14 +622,14 @@ class TotalVariationLoss(nn.Module):
     def mean_weighted_avg(x, m):
         return (x*m).mean()
 
+    def dilation(self, mask):
+            ret = K.morphology.dilation(mask.float(), kernel=self.kernel, border_value=0)
+            return K.morphology.dilation(ret, kernel=self.kernel, border_value=0)<1e-5
+
     def seg_inconsistency_3d_all_class(self, output, target, weighted_avg):
         # output = output.transpose(0, 1) # t, b, ...
         # target = target.transpose(0, 1) # t, b, ...
         
-        kernel = self.kernel
-        def dilation(mask):
-            ret = K.morphology.dilation(mask.float(), kernel=kernel, border_value=0)
-            return K.morphology.dilation(ret, kernel=kernel, border_value=0)<1e-5
 
 
         pred = torch.argmax(output, dim=2).to(dtype=target.dtype)
@@ -638,14 +640,14 @@ class TotalVariationLoss(nn.Module):
         right_pred_mask = right_pred[:, :-1] | right_pred[:, 1:]
         diff_pred = torch.abs(output[:, :-1] - output[:, 1:]) 
         # diff_pred_true = torch.gather(diff_pred, dim=2, index=target_select[:, :-1]).unsqueeze(dim=2)
-        mask = right_pred_mask.to(dtype=output.dtype) * dilation(target[:, :-1] != target[:, 1:])
+        mask = right_pred_mask.to(dtype=output.dtype) * self.dilation(target[:, :-1] != target[:, 1:])
         # t = diff_pred_true * mask
         t = weighted_avg(diff_pred, mask.unsqueeze(dim=2))
 
         # H
         right_pred_mask = right_pred[..., :-1, :] | right_pred[..., 1:, :]
         diff_pred = torch.abs(output[..., :-1, :] - output[..., 1:, :]) 
-        mask = right_pred_mask.to(dtype=output.dtype) * dilation(target[..., :-1, :] != target[..., 1:, :])
+        mask = right_pred_mask.to(dtype=output.dtype) * self.dilation(target[..., :-1, :] != target[..., 1:, :])
         # w = diff_pred_true * mask
         w = weighted_avg(diff_pred, mask.unsqueeze(dim=2))
 
@@ -655,7 +657,7 @@ class TotalVariationLoss(nn.Module):
         diff_pred = torch.abs(output[..., :-1] - output[..., 1:]) 
         # diff_pred_true = torch.gather(diff_pred, dim=2, index=target_select[..., :-1]).squeeze(dim=2)
         # print(diff_pred_true.shape, right_pred_mask.shape, target[..., :-1].shape)
-        mask = right_pred_mask.to(dtype=output.dtype) * dilation(target[..., :-1] != target[..., 1:])
+        mask = right_pred_mask.to(dtype=output.dtype) * self.dilation(target[..., :-1] != target[..., 1:])
         # h = diff_pred_true * mask
         h = weighted_avg(diff_pred, mask.unsqueeze(dim=2))
 
@@ -666,12 +668,6 @@ class TotalVariationLoss(nn.Module):
     def seg_inconsistency_temp_all_class(self, output, target, weighted_avg):
         # output = output.transpose(0, 1) # t, b, ...
         # target = target.transpose(0, 1) # t, b, ...
-        
-        kernel = self.kernel
-        def dilation(mask):
-            ret = K.morphology.dilation(mask.float(), kernel=kernel, border_value=0)
-            return K.morphology.dilation(ret, kernel=kernel, border_value=0)<1e-5
-
 
         pred = torch.argmax(output, dim=2).to(dtype=target.dtype)
         # target_select = target.unsqueeze(2)
@@ -681,16 +677,11 @@ class TotalVariationLoss(nn.Module):
         right_pred_mask = right_pred[:, :-1] | right_pred[:, 1:]
         diff_pred = torch.abs(output[:, :-1] - output[:, 1:]) 
         # diff_pred_true = torch.gather(diff_pred, dim=2, index=target_select[:, :-1]).unsqueeze(dim=2)
-        mask = right_pred_mask.to(dtype=output.dtype) * dilation(target[:, :-1] != target[:, 1:])
+        mask = right_pred_mask.to(dtype=output.dtype) * self.dilation(target[:, :-1] != target[:, 1:])
         # t = diff_pred_true * mask
         return weighted_avg(diff_pred, mask.unsqueeze(dim=2))
 
     def seg_inconsistency_temp_all_class_with_weight(self, output, target, trueclass_lambda=0.5, otherclass_lambda=0.25):
-        kernel = self.kernel
-        def dilation(mask):
-            ret = K.morphology.dilation(mask.float(), kernel=kernel, border_value=0)
-            return K.morphology.dilation(ret, kernel=kernel, border_value=0)<1e-5
-
 
         pred = torch.argmax(output, dim=2).to(dtype=target.dtype)
         right_pred = (target == pred)
@@ -706,18 +697,13 @@ class TotalVariationLoss(nn.Module):
         right_pred_mask = right_pred[:, :-1] | right_pred[:, 1:]
         diff_pred = torch.abs(output[:, :-1] - output[:, 1:]) 
         # diff_pred_true = torch.gather(diff_pred, dim=2, index=target_select[:, :-1]).unsqueeze(dim=2)
-        mask = right_pred_mask.to(dtype=output.dtype) * dilation(target[:, :-1] != target[:, 1:])
+        mask = right_pred_mask.to(dtype=output.dtype) * self.dilation(target[:, :-1] != target[:, 1:])
         # t = diff_pred_true * mask
         return weighted_avg(diff_pred, mask.unsqueeze(dim=2), gt_onehot[:, :-1])
 
     def seg_inconsistency_3d_all_class_with_weight(self, output, target, trueclass_lambda=0.5, otherclass_lambda=0.25):
         # output = output.transpose(0, 1) # t, b, ...
         # target = target.transpose(0, 1) # t, b, ...
-        
-        kernel = self.kernel
-        def dilation(mask):
-            ret = K.morphology.dilation(mask.float(), kernel=kernel, border_value=0)
-            return K.morphology.dilation(ret, kernel=kernel, border_value=0)<1e-5
 
 
         pred = torch.argmax(output, dim=2).to(dtype=target.dtype)
@@ -735,14 +721,14 @@ class TotalVariationLoss(nn.Module):
         right_pred_mask = right_pred[:, :-1] | right_pred[:, 1:]
         diff_pred = torch.abs(output[:, :-1] - output[:, 1:]) 
         # diff_pred_true = torch.gather(diff_pred, dim=2, index=target_select[:, :-1]).unsqueeze(dim=2)
-        mask = right_pred_mask.to(dtype=output.dtype) * dilation(target[:, :-1] != target[:, 1:])
+        mask = right_pred_mask.to(dtype=output.dtype) * self.dilation(target[:, :-1] != target[:, 1:])
         # t = diff_pred_true * mask
         t = weighted_avg(diff_pred, mask.unsqueeze(dim=2), gt_onehot[:, :-1])
 
         # H
         right_pred_mask = right_pred[..., :-1, :] | right_pred[..., 1:, :]
         diff_pred = torch.abs(output[..., :-1, :] - output[..., 1:, :]) 
-        mask = right_pred_mask.to(dtype=output.dtype) * dilation(target[..., :-1, :] != target[..., 1:, :])
+        mask = right_pred_mask.to(dtype=output.dtype) * self.dilation(target[..., :-1, :] != target[..., 1:, :])
         # w = diff_pred_true * mask
         w = weighted_avg(diff_pred, mask.unsqueeze(dim=2), gt_onehot[..., :-1, :])
 
@@ -751,7 +737,7 @@ class TotalVariationLoss(nn.Module):
         diff_pred = torch.abs(output[..., :-1] - output[..., 1:]) 
         # diff_pred_true = torch.gather(diff_pred, dim=2, index=target_select[..., :-1]).squeeze(dim=2)
         # print(diff_pred_true.shape, right_pred_mask.shape, target[..., :-1].shape)
-        mask = right_pred_mask.to(dtype=output.dtype) * dilation(target[..., :-1] != target[..., 1:])
+        mask = right_pred_mask.to(dtype=output.dtype) * self.dilation(target[..., :-1] != target[..., 1:])
         # h = diff_pred_true * mask
         h = weighted_avg(diff_pred, mask.unsqueeze(dim=2), gt_onehot[..., :-1])
 

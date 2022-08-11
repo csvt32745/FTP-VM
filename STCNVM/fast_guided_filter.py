@@ -11,33 +11,20 @@ class FastGuidedFilterRefiner(nn.Module):
         super().__init__()
         self.guilded_filter = FastGuidedFilter(1)
     
-    def forward_single_frame(self, fine_src, base_src, base_fgr, base_pha):
-        fine_src_gray = fine_src.mean(1, keepdim=True)
-        base_src_gray = base_src.mean(1, keepdim=True)
-        
-        fgr, pha = self.guilded_filter(
-            torch.cat([base_src, base_src_gray], dim=1),
-            torch.cat([base_fgr, base_pha], dim=1),
-            torch.cat([fine_src, fine_src_gray], dim=1)).split([3, 1], dim=1)
-        
-        return fgr, pha
+    def forward_single_frame(self, fine_src, base_src, base_pha):
+        return self.guilded_filter(base_src.mean(1, keepdim=True), base_pha, fine_src.mean(1, keepdim=True))
     
-    def forward_time_series(self, fine_src, base_src, base_fgr, base_pha):
-        B, T = fine_src.shape[:2]
-        fgr, pha = self.forward_single_frame(
+    def forward_time_series(self, fine_src, base_src, base_pha):
+        return self.forward_single_frame(
             fine_src.flatten(0, 1),
             base_src.flatten(0, 1),
-            base_fgr.flatten(0, 1),
-            base_pha.flatten(0, 1))
-        fgr = fgr.unflatten(0, (B, T))
-        pha = pha.unflatten(0, (B, T))
-        return fgr, pha
+            base_pha.flatten(0, 1)).unflatten(0, fine_src.shape[:2])
     
-    def forward(self, fine_src, base_src, base_fgr, base_pha, base_hid):
+    def forward(self, fine_src, base_src, base_pha):
         if fine_src.ndim == 5:
-            return self.forward_time_series(fine_src, base_src, base_fgr, base_pha)
+            return self.forward_time_series(fine_src, base_src, base_pha)
         else:
-            return self.forward_single_frame(fine_src, base_src, base_fgr, base_pha)
+            return self.forward_single_frame(fine_src, base_src, base_pha)
 
 
 class FastGuidedFilter(nn.Module):

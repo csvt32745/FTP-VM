@@ -90,7 +90,7 @@ class YouTubeVISDataset(Dataset):
         
         data = {
             'rgb': imgs,
-            # 'gt': segs,
+            'gt': segs,
         }
         if self.random_memtrimap:
             data['trimap'] = get_dilated_trimaps(segs, 17, random_kernel=False)

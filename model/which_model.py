@@ -57,11 +57,20 @@ def get_model_by_string(input_string):
         'GFM_GatedFuseVM_to4xglance_4xfocus_7': lambda: GFM_GatedFuseVM_to4xglance_4xfocus_7(fuse='sameqk_head1'),
         'GFM_GatedFuseVM_to4xglance_4xfocus_3_fullresgate': GFM_GatedFuseVM_to4xglance_4xfocus_3_fullresgate,
         'STCNFuseMatting': STCNFuseMatting,
+        'test': lambda :STCNFuseMatting(backbone_arch='efficientnet_b3a'),
         'STCNFuseMatting_big': STCNFuseMatting_big,
-        'STCNFuseMatting_gru_before_fuse': STCNFuseMatting_gru_before_fuse,
         'STCNFuseMatting_fuse': lambda: STCNFuseMatting(trimap_fusion=which_module),
-        'STCNFuseMatting_fullres_mat': STCNFuseMatting_fullres_mat,
+        'STCNFuseMatting_fullres': STCNFuseMatting_fullres_mat,
+        'STCNFuseMatting_fullres_gn': lambda: STCNFuseMatting_fullres_mat(trimap_fusion='gn'),
+        'STCNFuseMatting_fullres_mat2': lambda: STCNFuseMatting_fullres_mat(mat_decoder='4x_2'),
+        'STCNFuseMatting_fullres_mat3': lambda: STCNFuseMatting_fullres_mat(mat_decoder='4x_3'),
+        'STCNFuseMatting_fullres_matnaive': lambda: STCNFuseMatting_fullres_mat(mat_decoder='naive', trimap_fusion='gn'),
+        'STCNFuseMatting_fullres_matnaive_bn': lambda: STCNFuseMatting_fullres_mat(mat_decoder='naive', trimap_fusion='bn'),
+        'STCNFuseMatting_fullres_matnaive_seg2': lambda: STCNFuseMatting_fullres_mat(mat_decoder='naive', trimap_fusion='gn', seg_decoder='4x_2'),
+        'STCNFuseMatting_fullres_gn_3chmask': lambda: STCNFuseMatting_fullres_mat(trimap_fusion='gn', ch_mask=3),
         'STCNFuseMatting_SameDec': STCNFuseMatting_SameDec,
+        'STCNFuseMatting_1xseg': lambda: STCNFuseMatting(seg_decoder='1x', trimap_fusion='bn2'),
+        'STCNFuseMatting_1xseg_4x2mat': lambda: STCNFuseMatting(seg_decoder='1x', mat_decoder='4x_2', trimap_fusion='gn'),
 
 
     }[which_model]

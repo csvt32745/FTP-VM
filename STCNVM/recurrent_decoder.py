@@ -60,7 +60,8 @@ class RecurrentDecoder(nn.Module):
         self.decode2 = upblk(decoder_channels[0], feature_channels[1], 3, decoder_channels[1], gru=gru)
         self.decode1 = upblk(decoder_channels[1], feature_channels[0], 3, decoder_channels[2], gru=gru)
         self.decode0 = OutputBlock(decoder_channels[2], 3, decoder_channels[3])
-
+        self.default_rec = [None]*4
+        self.output_stride = 1
     def forward(self,
                 s0: Tensor, f1: Tensor, f2: Tensor, f3: Tensor, f4: Tensor,
                 r1: Optional[Tensor], r2: Optional[Tensor],

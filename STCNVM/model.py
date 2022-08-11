@@ -10,7 +10,7 @@ from einops import rearrange
 
 
 from .recurrent_decoder import *
-from .VM.fast_guided_filter import FastGuidedFilterRefiner
+from .fast_guided_filter import FastGuidedFilterRefiner
 from .VM.deep_guided_filter import DeepGuidedFilterRefiner
 
 from .backbone import *
@@ -76,12 +76,12 @@ class STCNFuseMatting(nn.Module):
         ch_seg=[96, 48, 16],
         ch_mat=32,
         seg_gru=ConvGRU,
-        refiner='deep_guided_filter',
         trimap_fusion='default',
-        bottleneck_fusion='default',
+        seg_decoder='4x',
+        mat_decoder='4x',
+        ch_mask=1,
     ):
         super().__init__()
-        assert refiner in ['fast_guided_filter', 'deep_guided_filter']
 
         # Encoder
         self.backbone = Backbone(backbone_arch, backbone_pretrained, (0, 1, 2, 3), in_chans=3)
@@ -89,12 +89,15 @@ class STCNFuseMatting(nn.Module):
             'default': TrimapGatedFusion,
             'naive': TrimapNaiveFusion,
             'bn': TrimapGatedFusionBN,
+            'bn2': TrimapGatedFusionBN2,
+            'in': TrimapGatedFusionIN,
+            'gn': TrimapGatedFusionGN,
             'fullres': TrimapGatedFusionFullRes,
             'intrimap_only': TrimapGatedFusionInTrimapOnly,
             'intrimap_only_fullres': TrimapGatedFusionInTrimapOnlyFullres,
             'small': TrimapGatedFusionSmall,
             'fullgate': TrimapGatedFusionFullGate,
-        }[trimap_fusion](self.backbone.channels)
+        }[trimap_fusion](self.backbone.channels, ch_mask=ch_mask)
         
         self.bottleneck_fuse = BottleneckFusion(self.backbone.channels[-1], ch_key, self.backbone.channels[-1], ch_bottleneck)
 
@@ -105,22 +108,28 @@ class STCNFuseMatting(nn.Module):
         
         # Decoder
         self.ch_seg = ch_seg # 8, 4, out
-        self.seg_decoder = SegmentationDecoderTo4x_bottleneck_gru(
-            self.feat_channels, self.ch_seg, gru=seg_gru)
+        self.seg_decoder = {
+            '4x': SegmentationDecoderTo4x,
+            '4x_2': SegmentationDecoderTo4x_2
+        }[seg_decoder](self.feat_channels, self.ch_seg, gru=seg_gru)
+
         self.seg_project = Projection(self.ch_seg[-1], 3)
+        self.seg_upsample = self.seg_decoder.output_stride > 1
+        self.seg_stride = [self.seg_decoder.output_stride]*2
 
         self.ch_mat = ch_mat
-        self.mat_decoder = MattingDecoderFrom4x(
-            self.feat_channels, 
+        self.mat_decoder = {
+            '4x': MattingDecoderFrom4x,
+            '4x_2': MattingDecoderFrom4x_2,
+        }[mat_decoder](self.feat_channels, 
             [ch_bottleneck] + self.ch_seg, 
-            ch_feat=self.ch_mat, ch_out=self.ch_mat, gru=ConvGRU)
+            ch_feat=self.ch_mat, ch_out=self.ch_mat, gru=ConvGRU
+        )
         self.mat_project = Projection(self.ch_mat, 1)
         self.default_rec = [self.seg_decoder.default_rec, self.mat_decoder.default_rec, None]
         # print(self.default_rec)
-        if refiner == 'deep_guided_filter':
-            self.refiner = DeepGuidedFilterRefiner(self.ch_mat)
-        else:
-            self.refiner = FastGuidedFilterRefiner()
+        self.refiner = FastGuidedFilterRefiner(self.ch_mat)
+        
 
     def forward(self, 
         qimgs: Tensor, mimgs: Tensor, masks: Tensor,
@@ -186,25 +195,26 @@ class STCNFuseMatting(nn.Module):
         # hid, rec1, rec2 ..., inter-feats
         rec_seg, feat_seg = remain[:-1], remain[-1]
         out_seg = self.seg_project(hid)
-        out_seg = F.interpolate(out_seg.flatten(0, 1), scale_factor=(4, 4), mode='bilinear').unflatten(0, out_seg.shape[:2])
+        if self.seg_upsample:
+            out_seg = F.interpolate(out_seg.flatten(0, 1), scale_factor=self.seg_stride, mode='bilinear').unflatten(0, out_seg.shape[:2])
         if segmentation_pass:
             return [out_seg, rec_seg]
 
         # Matting
         hid, *remain = self.mat_decoder(
-            qimg_sm, qimg_sm_avg[0], 
+            qimg_sm, *qimg_sm_avg[:2], 
             *feats_q[:2],
             feat_seg[0], feat_seg[2],
             *rec_mat
         )
         rec_mat, feats = remain[:-1], remain[-1]
         out_mat = torch.sigmoid(self.mat_project(hid))
-        
+        out_collab = collaborate_fuse(out_seg, out_mat)
         if is_refine:
-            # fgr_residual, pha = self.refiner(src, src_sm, fgr_residual, pha, hid)
-            pass
+            self.tmp_out_collab = F.interpolate(out_collab.detach().flatten(0, 1), qimgs.shape[-2:], mode='bilinear', align_corners=False).unflatten(0, qimgs.shape[:2])
+            out_collab = self.refiner(qimgs, qimg_sm, out_collab)
 
-        return [out_seg, out_mat, collaborate_fuse(out_seg, out_mat), [rec_seg, rec_mat, rec_bottleneck], feats]
+        return [out_seg, out_mat, out_collab, [rec_seg, rec_mat, rec_bottleneck], feats]
 
     def _smaller_input(self,
         query_img: Tensor,
@@ -227,7 +237,10 @@ class STCNFuseMatting(nn.Module):
         key = self.trimap_fuse(feats[3]).transpose(1, 2)
         return feats, key
 
-    def encode_imgs_to_value(self, imgs, masks):
+    def encode_imgs_to_value(self, imgs, masks, downsample_ratio = 1):
+        if downsample_ratio != 1:
+            imgs = self._interpolate(imgs, scale_factor=downsample_ratio)
+            masks = self._interpolate(masks, scale_factor=downsample_ratio)
         feat = self.backbone(imgs)
         values = self.trimap_fuse(imgs, masks, feat) # b, c, t, h, w
         return feat[-1], values
@@ -243,36 +256,56 @@ class STCNFuseMatting(nn.Module):
                 mode='bilinear', align_corners=False, recompute_scale_factor=False)
         return x
 
-class STCNFuseMatting_gru_before_fuse(STCNFuseMatting):
-    def __init__(self, backbone_arch='mobilenetv3_large_100', backbone_pretrained=True, ch_bottleneck=128, ch_key=32, seg_gru=ConvGRU, refiner='deep_guided_filter'):
-        super().__init__(backbone_arch, backbone_pretrained, ch_bottleneck, ch_key, seg_gru, refiner)
-        del self.bottleneck_fuse
-        self.bottleneck_fuse = BottleneckFusionGRU(
-            self.backbone.channels[-1], ch_key, self.backbone.channels[-1], ch_bottleneck)
-
-        del self.seg_decoder
-        self.seg_decoder = SegmentationDecoderTo4x(
-            self.feat_channels, self.ch_seg, gru=seg_gru)
-        
-
 class STCNFuseMatting_big(STCNFuseMatting):
     def __init__(self):
         super().__init__(ch_seg=[96, 64, 32], ch_mat=32)
     
+
 class STCNFuseMatting_fullres_mat(STCNFuseMatting):
-    def __init__(self, backbone_arch='mobilenetv3_large_100', backbone_pretrained=True, ch_bottleneck=128, ch_key=32, ch_seg=[96, 48, 16], ch_mat=32, seg_gru=ConvGRU, refiner='deep_guided_filter', trimap_fusion='default', bottleneck_fusion='default'):
-        super().__init__(backbone_arch, backbone_pretrained, ch_bottleneck, ch_key, ch_seg, ch_mat, seg_gru, refiner, trimap_fusion, bottleneck_fusion)
-    
-        del self.mat_decoder
-        self.mat_decoder = MattingDecoderFrom4x_fullres_chattn(
-            self.feat_channels, 
+    def __init__(
+        self, 
+        backbone_arch='mobilenetv3_large_100', 
+        backbone_pretrained=True, 
+        ch_bottleneck=128,
+        ch_key=32,
+        ch_seg=[96, 48, 16],
+        ch_mat=[64, 32, 16, 8],
+        seg_gru=ConvGRU,
+        trimap_fusion='default',
+        seg_decoder='4x',
+        mat_decoder='4x',
+        ch_mask=1,
+    ):
+        super().__init__(
+        backbone_arch=backbone_arch, 
+        backbone_pretrained=backbone_pretrained, 
+        ch_bottleneck=ch_bottleneck,
+        ch_key=ch_key,
+        ch_seg=ch_seg,
+        ch_mat=32,
+        seg_gru=seg_gru,
+        trimap_fusion=trimap_fusion,
+        seg_decoder=seg_decoder,
+        ch_mask=ch_mask,
+    )
+        
+        self.ch_mat = ch_mat
+        self.mat_decoder = {
+            '4x': MattingDecoderFrom4x_feats,
+            '4x_2': MattingDecoderFrom4x_feats_2,
+            '4x_3': MattingDecoderFrom4x_feats_3,
+            'naive': MattingDecoderFrom4x_feats_naive,
+        }[mat_decoder](self.feat_channels, 
             [ch_bottleneck] + self.ch_seg, 
-            ch_feat=self.ch_mat, ch_out=self.ch_mat, gru=ConvGRU
+            self.ch_mat, gru=ConvGRU
         )
+        self.mat_project = Projection(self.ch_mat[-1], 1)
+        self.default_rec = [self.seg_decoder.default_rec, self.mat_decoder.default_rec, None]
+
 
 class STCNFuseMatting_SameDec(STCNFuseMatting):
-    def __init__(self, backbone_arch='mobilenetv3_large_100', backbone_pretrained=True, ch_bottleneck=128, ch_key=32, ch_seg=[96, 48, 16], ch_mat=32, seg_gru=ConvGRU, refiner='deep_guided_filter', trimap_fusion='default', bottleneck_fusion='default'):
-        super().__init__(backbone_arch, backbone_pretrained, ch_bottleneck, ch_key, ch_seg, ch_mat, seg_gru, refiner, trimap_fusion, bottleneck_fusion)
+    def __init__(self, backbone_arch='mobilenetv3_large_100', backbone_pretrained=True, ch_bottleneck=128, ch_key=32, ch_seg=[96, 48, 16], ch_mat=32, seg_gru=ConvGRU, trimap_fusion='default', seg_decoder='4x', mat_decoder='4x'):
+        super().__init__(backbone_arch, backbone_pretrained, ch_bottleneck, ch_key, ch_seg, ch_mat, seg_gru, trimap_fusion, seg_decoder, mat_decoder)
     
         del self.mat_decoder
         del self.seg_decoder

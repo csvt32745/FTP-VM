@@ -177,16 +177,16 @@ inference_model_list = [
     
 	('STCNFuseMatting_fuse=bn', 'STCNFuseMatting_fuse=bn', InferenceCoreRecurrentGFM, 
 	'./saves/Jul30_00.02.43_STCNFuseMatting_fuse=bn/Jul30_00.02.43_STCNFuseMatting_fuse=bn_120000.pth'),
-	('STCNFuseMatting_fuse=fullres', 'STCNFuseMatting_fuse=fullres', InferenceCoreRecurrentGFM, 
-	'./saves/Jul29_16.14.22_STCNFuseMatting_fuse=fullres/Jul29_16.14.22_STCNFuseMatting_fuse=fullres_120000.pth'),
+	# ('STCNFuseMatting_fuse=fullres', 'STCNFuseMatting_fuse=fullres', InferenceCoreRecurrentGFM, 
+	# './saves/Jul29_16.14.22_STCNFuseMatting_fuse=fullres/Jul29_16.14.22_STCNFuseMatting_fuse=fullres_120000.pth'),
 	('STCNFuseMatting_randtri', 'STCNFuseMatting', InferenceCoreRecurrentGFM, 
 	'./saves/Jul29_15.40.06_STCNFuseMatting_randtri/Jul29_15.40.06_STCNFuseMatting_randtri_120000.pth'),
     
 
     ('STCNFuseMatting_fuse=fullgate', 'STCNFuseMatting_fuse=fullgate', InferenceCoreRecurrentGFM, 
 	'./saves/Aug03_10.42.16_STCNFuseMatting_fuse=fullgate/Aug03_10.42.16_STCNFuseMatting_fuse=fullgate_120000.pth'),
-    ('STCNFuseMatting_fuse=naive_480', 'STCNFuseMatting_fuse=naive', InferenceCoreRecurrentGFM, 
-	'./saves/Aug03_00.30.22_STCNFuseMatting_fuse=naive_480/Aug03_00.30.22_STCNFuseMatting_fuse=naive_480_120000.pth'),
+    # ('STCNFuseMatting_fuse=naive_480', 'STCNFuseMatting_fuse=naive', InferenceCoreRecurrentGFM, 
+	# './saves/Aug03_00.30.22_STCNFuseMatting_fuse=naive_480/Aug03_00.30.22_STCNFuseMatting_fuse=naive_480_120000.pth'),
 	('STCNFuseMatting_fuse=intrimap_only', 'STCNFuseMatting_fuse=intrimap_only', InferenceCoreRecurrentGFM, 
 	'./saves/Aug02_16.46.55_STCNFuseMatting_fuse=intrimap_only/Aug02_16.46.55_STCNFuseMatting_fuse=intrimap_only_120000.pth'),
     ('STCNFuseMatting_fuse=small', 'STCNFuseMatting_fuse=small', InferenceCoreRecurrentGFM, 
@@ -206,7 +206,38 @@ inference_model_list = [
 	'./saves/Aug04_19.01.14_STCNFuseMatting_SameDec_480/Aug04_19.01.14_STCNFuseMatting_SameDec_480_120000.pth'),
 	('STCNFuseMatting_fuse=intrimap_only_fullres', 'STCNFuseMatting_fuse=intrimap_only_fullres', InferenceCoreRecurrentGFM, 
 	'./saves/Aug04_02.38.27_STCNFuseMatting_fuse=intrimap_only_fullres/Aug04_02.38.27_STCNFuseMatting_fuse=intrimap_only_fullres_120000.pth'),
+    ('STCNFuseMatting_fuse=fullres', 'STCNFuseMatting_fuse=fullres', InferenceCoreRecurrentGFM, 
+	'./saves/Aug05_02.48.42_STCNFuseMatting_fuse=fullres/Aug05_02.48.42_STCNFuseMatting_fuse=fullres_120000.pth'),
+    ('STCNFuseMatting_fuse=naive_480', 'STCNFuseMatting_fuse=naive', InferenceCoreRecurrentGFM, 
+	'./saves/Aug06_01.31.09_STCNFuseMatting_fuse=naive_480/Aug06_01.31.09_STCNFuseMatting_fuse=naive_480_120000.pth'),
+    ('STCNFuseMatting_fuse=bn_wo_consis_480', 'STCNFuseMatting_fuse=bn', InferenceCoreRecurrentGFM, 
+	'./saves/Aug06_01.31.09_STCNFuseMatting_fuse=bn_wo_consis_480/Aug06_01.31.09_STCNFuseMatting_fuse=bn_wo_consis_480_120000.pth'),
+    ('STCNFuseMatting_1xseg_4x2mat', 'STCNFuseMatting_1xseg_4x2mat', InferenceCoreRecurrentGFM, 
+	'./saves/Aug06_16.19.43_STCNFuseMatting_1xseg_4x2mat/Aug06_16.19.43_STCNFuseMatting_1xseg_4x2mat_120000.pth'),
+	# ('STCNFuseMatting_fuse=gn_480', 'STCNFuseMatting_fuse=gn', InferenceCoreRecurrentGFM, 
+	# './saves/Aug06_16.19.33_STCNFuseMatting_fuse=gn_480/Aug06_16.19.33_STCNFuseMatting_fuse=gn_480_120000.pth'),
+    
+    ('STCNFuseMatting_fuse=bn_seg_consis_correctonly_480', 'STCNFuseMatting_fuse=bn', InferenceCoreRecurrentGFM, 
+	'./saves/Aug07_18.16.20_STCNFuseMatting_fuse=bn_seg_consis_correctonly_480/Aug07_18.16.20_STCNFuseMatting_fuse=bn_seg_consis_correctonly_480_120000.pth'),
 
+    ('STCNFuseMatting_fuse=gn_480', 'STCNFuseMatting_fuse=gn', InferenceCoreRecurrentGFM, 
+	'./saves/Aug08_09.07.55_STCNFuseMatting_fuse=gn_480/Aug08_09.07.55_STCNFuseMatting_fuse=gn_480_120000.pth'),
+    ('STCNFuseMatting_fullresseg', 'STCNFuseMatting_fullresseg', InferenceCoreRecurrentGFM, 
+	'./saves/Aug08_09.07.55_STCNFuseMatting_fullresseg/Aug08_09.07.55_STCNFuseMatting_fullresseg_120000.pth'),
+    ('STCNFuseMatting_fuse=bn2_480', 'STCNFuseMatting_fuse=bn2', InferenceCoreRecurrentGFM, 
+	'./saves/Aug08_13.41.34_STCNFuseMatting_fuse=bn2_480/Aug08_13.41.34_STCNFuseMatting_fuse=bn2_480_120000.pth'),
+    ('STCNFuseMatting_fullres_mat3_480', 'STCNFuseMatting_fullres_mat3', InferenceCoreRecurrentGFM, 
+	'./saves/Aug08_13.41.27_STCNFuseMatting_fullres_mat3_480/Aug08_13.41.27_STCNFuseMatting_fullres_mat3_480_120000.pth'),
+
+    ('STCNFuseMatting_fullres_480_none_temp_seg', 'STCNFuseMatting_fullres_gn', InferenceCoreRecurrentGFM, 
+	'./saves/Aug09_13.26.00_STCNFuseMatting_fullres_480_none_temp_seg/Aug09_13.26.00_STCNFuseMatting_fullres_480_none_temp_seg_120000.pth'),
+    ('STCNFuseMatting_fullres_480_temp_seg_allclass_weight_x1', 'STCNFuseMatting_fullres_gn', InferenceCoreRecurrentGFM, 
+	'./saves/Aug10_08.09.55_STCNFuseMatting_fullres_480_temp_seg_allclass_weight_x1/Aug10_08.09.55_STCNFuseMatting_fullres_480_temp_seg_allclass_weight_x1_120000.pth'),
+    ('STCNFuseMatting_fullres_matnaive', 'STCNFuseMatting_fullres_matnaive', InferenceCoreRecurrentGFM, 
+	'./saves/Aug11_15.46.26_STCNFuseMatting_fullres_matnaive/Aug11_15.46.26_STCNFuseMatting_fullres_matnaive_120000.pth'),
+
+    ('STCNFuseMatting_fullres_matnaive_480_temp_seg', 'STCNFuseMatting_fullres_matnaive', InferenceCoreRecurrentGFM, 
+	'./saves/Aug11_22.07.52_STCNFuseMatting_fullres_matnaive_480_temp_seg/Aug11_22.07.52_STCNFuseMatting_fullres_matnaive_480_temp_seg_120000.pth'),
 ]   
 
 

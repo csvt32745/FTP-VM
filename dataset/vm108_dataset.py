@@ -41,10 +41,12 @@ class VM108ValidationDataset(Dataset):
 
         # These set of transform is the same for im/gt pairs, but different among the 3 sampled frames
         interp_mode = transforms.InterpolationMode.BILINEAR
-
-        self.crop = transforms.Compose([
-            transforms.Resize(self.size, interpolation=interp_mode),
-        ])
+        if self.size[0] > 0:
+            self.crop = transforms.Compose([
+                transforms.Resize(self.size, interpolation=interp_mode),
+            ])
+        else:
+            self.crop = lambda x: x
 
         # Final transform without randomness
         self.final_im_transform = transforms.Compose([
