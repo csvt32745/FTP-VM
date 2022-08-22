@@ -10,10 +10,13 @@ class HyperParameters():
         parser.add_argument('--which_model', help='Use which model', default='NULL')
         parser.add_argument('--tvloss_type', help='Loss type of total variation', default='3d_seg', type=str)
         parser.add_argument('--celoss_type', help='Loss type of cross entropy: [focal, normal]', default='focal', type=str)
+        parser.add_argument('--full_matte', help='predict full matte in the matting decoder', action='store_true')
         parser.add_argument('--lambda_segtv', help='lambda of segmentation consistency(total variation loss)', default=10, type=float)
         parser.add_argument('--start_segtv', help='start iteration of segmentation consistency(total variation loss)', default=-1, type=int)
         
         parser.add_argument('--split_trimap', help='split 1ch-trimap into 3ch masks', action='store_true')
+        parser.add_argument('--memory_alpha', help='input memory alpha along with memory trimap', action='store_true')
+        parser.add_argument('--memory_out_alpha_start', help='input memory alpha along with memory trimap', default=30000, type=int)
         parser.add_argument('--compose_multiobj', help='fuse other fgs into bgs in the batch', action='store_true')
         parser.add_argument('--ytvos', help='use YTVOS dataset intead of VIS for segmentation training', action='store_true')
 

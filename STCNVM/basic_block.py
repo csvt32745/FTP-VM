@@ -55,6 +55,25 @@ class ResBlock(nn.Module):
         x = self.skip(x)
         return x + r
 
+class ResBlock2(nn.Module):
+    def __init__(self, indim, outdim=None):
+        super().__init__()
+        if outdim == None:
+            outdim = indim
+        if indim == outdim:
+            self.skip = nn.Identity()
+        else:
+            self.skip = nn.Conv2d(indim, outdim, kernel_size=1)
+ 
+        self.conv1 = nn.Conv2d(indim, outdim, kernel_size=3, padding=1)
+        # self.conv2 = nn.Conv2d(outdim, outdim, kernel_size=3, padding=1)
+ 
+    def forward(self, x):
+        r = self.conv1(F.relu(x))
+        # r = self.conv2(F.relu(r))
+        x = self.skip(x)
+        return x + r
+
 class UpsampleBlock(nn.Module):
     def __init__(self, skip_c, up_c, out_c, scale_factor=2, bn=False):
         super().__init__()

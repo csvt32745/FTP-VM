@@ -38,9 +38,18 @@ class PropagationModel:
         self.save_path = save_path
         os.makedirs(os.path.dirname(self.save_path), exist_ok=True)
         self.para.save(os.path.join(os.path.dirname(self.save_path), 'config.json'))
+        
+
+        # TODO:
+        self.full_trimaps = '2stage' in para['which_model']
+        if self.full_trimaps:
+            print("2 Stage model: given full trimaps.")
+
         self.compose_multiobj = para['compose_multiobj']
         self.split_trimap = para['split_trimap']
         self.random_memtrimap = para['random_memtrimap']
+        self.memory_alpha = para['memory_alpha']
+        self.memory_out_alpha_start = para['memory_out_alpha_start']
 
         if logger is not None:
             self.last_time = time.time()
@@ -97,7 +106,7 @@ class PropagationModel:
         mask = torch.cat([fg, ~(fg|bg), bg], dim=2).float()
         return mask
 
-    def far_seg_pass(self, data):
+    def far_seg_pass(self, data, it):
         trimap = data['trimap']
         # gt = data['gt']
         rgb = data['rgb']
@@ -107,9 +116,23 @@ class PropagationModel:
         # rgb_m, rgb_q = rgb.split([1, T-1], dim=1)
         # gt_m, gt_q = gt.split([1, T-1], dim=1)
         
-        mem_tri = data['mem_trimap'] if self.random_memtrimap else trimap[:, [0]]
-        if self.split_trimap:
-            mem_tri = self.trimap_to_3chmask(mem_tri)
+        # TODO:
+        if self.full_trimaps:
+            mem_tri = trimap
+        else:
+            mem_tri = data['mem_trimap'] if self.random_memtrimap else trimap[:, [0]]
+
+        if self.split_trimap: mem_tri = self.trimap_to_3chmask(mem_tri)
+
+        if self.memory_alpha:
+            if it < self.memory_out_alpha_start or random.random() < 0.5:
+                mem_tri = mem_tri.repeat_interleave(2, dim=2)
+            else:
+                mem_rgb = rgb[:, [0]]
+                ret = self.PNet(mem_rgb, mem_rgb, mem_tri.repeat_interleave(2, dim=2))
+                alpha_out = ret[2] if len(ret) == 5 else ret[0] # collab or not
+                mem_tri = torch.cat([mem_tri, alpha_out], dim=2)
+
         ret = self.PNet(rgb, rgb[:, [0]], mem_tri, segmentation_pass=True)
         logits = ret[0]
         out = {
@@ -145,20 +168,10 @@ class PropagationModel:
         rgb = bg * (1-gt) + fg * gt
         return rgb, bg
 
-    def far_mat_pass(self, data):
-        if (bg := data['bg']).ndim == 6:
-            # for fgr with multiple bgrs
-            # fg.shape = B, T, C, H, W
-            # bg.shape = B, bg_num, T, C, H, W
-            data['bg_num'] = bg_num = bg.size(1)
-            data['fg'] = fg = einops.repeat(data['fg'], 'b t c h w -> (b bg) t c h w', bg=bg_num)
-            data['gt'] = gt = einops.repeat(data['gt'], 'b t c h w -> (b bg) t c h w', bg=bg_num)
-            data['bg'] = bg = einops.rearrange(bg, 'b bg t c h w -> (b bg) t c h w')
-        else:
-            data['bg_num'] = 1
-            fg = data['fg']
-            gt = data['gt']
-
+    def far_mat_pass(self, data, it):
+        fg = data['fg']
+        gt = data['gt']
+        bg = data['bg']
         # trimap = data['trimap']
         if self.compose_multiobj and random.random() < 0.5:
             rgb, bg = self.compose_multiobj_data(fg, bg, gt)
@@ -167,10 +180,24 @@ class PropagationModel:
         else:
             rgb = data['rgb'] = fg*gt + bg*(1-gt)
         # B, T, C, H, W
+        
+        # TODO:
+        if self.full_trimaps:
+            mem_tri = data['trimap']
+        else:
+            mem_tri = data['mem_trimap'] if self.random_memtrimap else data['trimap'][:, [0]]
 
-        mem_tri = data['mem_trimap'] if self.random_memtrimap else data['trimap'][:, [0]]
-        if self.split_trimap:
-            mem_tri = self.trimap_to_3chmask(mem_tri)
+        if self.split_trimap: mem_tri = self.trimap_to_3chmask(mem_tri)
+        
+        if self.memory_alpha:
+            if it < self.memory_out_alpha_start or random.random() < 0.5:
+                mem_tri = mem_tri.repeat_interleave(2, dim=2)
+            else:
+                mem_rgb = rgb[:, [0]]
+                ret = self.PNet(mem_rgb, mem_rgb, mem_tri.repeat_interleave(2, dim=2))
+                alpha_out = ret[2] if len(ret) == 5 else ret[0] # collab or not
+                mem_tri = torch.cat([mem_tri, alpha_out], dim=2)
+            
         ret = self.PNet(rgb, rgb[:, [0]], mem_tri, segmentation_pass=False)
         out = {}
         
@@ -198,7 +225,7 @@ class PropagationModel:
         # return torch.cat([cur[:, [0]], cur[:, :-1]], dim=1)
 
 
-    def do_pass(self, data, it=0, segmentation_pass=False):
+    def do_pass(self, data, it, segmentation_pass=False):
         # No need to store the gradient outside training
         torch.set_grad_enabled(self._is_train)
         
@@ -206,7 +233,7 @@ class PropagationModel:
             if type(v) != list and type(v) != dict and type(v) != int:
                 data[k] = v.cuda(non_blocking=True)
 
-        data, out = self.seg_pass(data) if segmentation_pass else self.mat_pass(data)
+        data, out = self.seg_pass(data, it) if segmentation_pass else self.mat_pass(data, it)
 
         if self._do_log or self._is_train:
             data, losses = (self.seg_loss_computer if segmentation_pass else self.loss_computer)\

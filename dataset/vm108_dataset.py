@@ -231,6 +231,10 @@ class VM240KValidationDataset(Dataset):
         # self.to_tensor = transforms.ToTensor()
 
     def set_frames_per_item(self, frames_per_item):
+        if 'frames_per_item' in dir(self):
+            print("Set dataset batch from %d to %d" % (self.frames_per_item, frames_per_item))
+            if frames_per_item == self.frames_per_item:
+                return
         self.frames_per_item = frames_per_item
         self.prepare_frame_list()
 

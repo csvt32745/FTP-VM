@@ -172,7 +172,7 @@ class SegLossComputer:
             return data, losses
 
         elif size == 1:
-            gt = data['gt_query']
+            gt = data['gt']
             # label = get_label_from_trimap(data['trimap'])
             losses['seg_bce'] = self.bce(logits, gt)
 
@@ -230,6 +230,7 @@ class MatLossComputer:
         self.tvloss = TotalVariationLoss(para['tvloss_type']).cuda()
         self.lambda_tvloss = para['lambda_segtv']
         self.start_tvloss = para['start_segtv']
+        self.full_matte = para['full_matte']
 
     @staticmethod
     def unpack_data_with_bgnum(data: dict, key):
@@ -256,7 +257,10 @@ class MatLossComputer:
         #     data['pred_bg'] = bg_out
 
         if 'collab' in data:
-            losses.update(self.gfm_loss(it, data, gt_mask))
+            if self.full_matte:
+                losses.update(self.full_matte_loss(it, data, gt_mask))
+            else:
+                losses.update(self.gfm_loss(it, data, gt_mask))
             losses['total_loss'] = sum(losses.values())
             return data, losses
 
@@ -293,6 +297,21 @@ class MatLossComputer:
             loss['focus_'+k] = v
         for k, v in self.alpha_loss(data['collab'], gt_mask).items():
             loss['collab_'+k] = v
+        return loss
+    
+    def full_matte_loss(self, it, data, gt_mask):
+        loss = {}
+        logits = data['glance']
+        trimap = data['trimap']
+        label = get_label_from_trimap(trimap)
+        # loss['seg_bce'] = self.bsce(logits.flatten(0, 1), label.flatten(0, 1), it)
+        loss['seg_bce'] = self.ce(logits.flatten(0, 1), label.flatten(0, 1))
+        # loss['seg_bce'], target = self.fce(logits, trimap, True) # return target = True
+        if it >= self.start_tvloss:
+            loss['seg_tv'] = self.tvloss(logits, label)*self.lambda_tvloss
+
+        for k, v in self.alpha_loss(data['focus'], gt_mask).items():
+            loss['focus_'+k] = v
         return loss
 
     def alpha_loss(self, pred_pha, true_pha, mask=None):
@@ -341,17 +360,6 @@ class MatLossComputer:
             true_fgr = true_fgr * true_msk
             loss['fgr_coherence'] = F.mse_loss(pred_fgr[:, 1:] - pred_fgr[:, :-1],
                                                true_fgr[:, 1:] - true_fgr[:, :-1]) * 5
-        
-        # Feature losses
-        if feats is not None:
-            # avg_msk = einops.rearrange(true_msk, '(b bg_num) t c h w -> bg_num b t c h w', bg_num=feats[0].size(0))[0].float()
-            floss = 0
-            for f in feats:
-                # avg_msk = self.avg2d(avg_msk) # b, t, c/1, h/2, w/2
-                f = f.flatten(0, 1)
-                # num, b, t, c, h, w
-                floss = floss + L1_mask(f[0], f[1])
-            loss['bgwise_feat_l1'] = floss*0.001
 
         return loss
 

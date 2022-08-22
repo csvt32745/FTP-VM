@@ -16,6 +16,7 @@ from functools import reduce
 from .basic_block import ResBlock, GatedConv2d, AvgPool, FocalModulation
 from .recurrent_decoder import ConvGRU
 from . import cbam
+from .backbone import *
 
 class TrimapGatedFusion(nn.Module):
     def __init__(self, ch_feats, ch_mask=1):
@@ -43,6 +44,16 @@ class TrimapGatedFusion(nn.Module):
             f = self.gated_convs[i](f)
         # f = f.view(*bt, f.shape[1:])
         f = f.unflatten(0, bt)
+        return f.transpose(1, 2) # b, t, c, h, w -> b, c, t, h, w
+
+class TrimapFusionBackbone(nn.Module):
+    def __init__(self, ch_feats, ch_mask=1):
+        super().__init__()
+        assert len(ch_feats) == 4
+        self.conv = Backbone('mobilenetv3_large_100', True, (3,), in_chans=4)
+        
+    def forward(self, img: Tensor, mask: Tensor, feats: List[Tensor]):
+        f = self.conv(torch.cat([img, mask], dim=2))[0]
         return f.transpose(1, 2) # b, t, c, h, w -> b, c, t, h, w
 
 class TrimapGatedFusionBN(TrimapGatedFusion):
@@ -177,12 +188,12 @@ class TrimapNaiveFusion(TrimapGatedFusion):
         del self.gated_convs
         self.gated_convs = nn.ModuleList([
             nn.Sequential(
-                nn.Conv2d(ch_feats[i]+ch_mask+(ch_feats[i-1] if i > 0 else 0), ch_feats[i], 3, 1, 1, bias=False),
-                nn.BatchNorm2d(ch_feats[i]),
+                nn.Conv2d(ch_feats[i]+ch_mask+(ch_feats[i-1] if i > 0 else 0), ch_feats[i], 3, 1, 1),
                 nn.LeakyReLU(0.2),
-                nn.Conv2d(ch_feats[i], ch_feats[i], 3, 1, 1, bias=False),
                 nn.BatchNorm2d(ch_feats[i]),
+                nn.Conv2d(ch_feats[i], ch_feats[i], 3, 1, 1),
                 nn.LeakyReLU(0.2),
+                nn.BatchNorm2d(ch_feats[i]),
                 nn.AvgPool2d((2, 2)) if i < 3 else nn.Identity(),
             )
             for i in range(4)

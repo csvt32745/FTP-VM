@@ -35,12 +35,13 @@ def check_and_load_model_dict(model: nn.Module, state_dict: dict):
             state_dict.pop(k)
     model.load_state_dict(state_dict)
 
-def run_inference(inference_core: InferenceCore, pred_path, gt_path, dataset, tmp_save_root=''):
+def run_inference(inference_core: InferenceCore, pred_path, gt_path, dataset, tmp_save_root='', save_video=True):
     fps = inference_core.propagate(tmp_save_root=os.path.join(tmp_save_root, dataset))
     
     inference_core.save_imgs(os.path.join(pred_path, dataset))
     inference_core.save_gt(os.path.join(gt_path, dataset))
-    inference_core.save_video(os.path.join(pred_path, dataset))
+    if save_video:
+        inference_core.save_video(os.path.join(pred_path, dataset))
     return fps
 
 def run_evaluation(
@@ -49,11 +50,12 @@ def run_evaluation(
     inference_core_func, 
     dataset_name, dataset, dataloader,
     memory_freq=-1, memory_gt=True, memory_bg=False,
-    gt_name='GT', downsample_ratio=1
+    gt_name='GT', downsample_ratio=1, save_video=True, 
+    memory_save_iter=-1, memory_bank_size=5,
     ):
     print(f"=" * 30)
-    print(f"[ Current model: {model_name}, memory freq: {memory_freq}, memory bg: {memory_bg} ]")
-
+    print(f"[ Current model: {model_name}, memory gt freq: {memory_freq}, memory save freq: {memory_save_iter}, memory bank size: {memory_bank_size} save video: {save_video}]")
+ 
     pred_path = os.path.join(root, model_name)
     gt_path = os.path.join(root, gt_name)
     tmp_save_root = '' if downsample_ratio == 1 else pred_path+"_naive"
@@ -71,9 +73,11 @@ def run_evaluation(
     while True:
         inference_core = inference_core_func(
             model, dataset, loader_iter, last_data=last_data,
-            memory_iter=memory_freq, memory_gt=memory_gt, memory_bg=memory_bg, downsample_ratio=downsample_ratio)
+            memory_iter=memory_freq, memory_gt=memory_gt, memory_bg=memory_bg, 
+            memory_save_iter=memory_save_iter, memory_bank_size=memory_bank_size,
+            downsample_ratio=downsample_ratio)
         
-        fps.append(run_inference(inference_core, pred_path, gt_path, dataset_name, tmp_save_root))
+        fps.append(run_inference(inference_core, pred_path, gt_path, dataset_name, tmp_save_root, save_video=save_video))
 
         # load next batch
         if inference_core.is_vid_overload:
