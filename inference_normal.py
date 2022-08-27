@@ -1,7 +1,7 @@
 from argparse import ArgumentParser
 
 parser = ArgumentParser()
-parser.add_argument('--size', help='eval video size: sd, 1024, hd, 4k', default='sd', type=str)
+parser.add_argument('--size', help='eval video size: sd, 1024, hd, 4k', default='1024', type=str)
 parser.add_argument('--batch_size', help='frames in a batch', default=8, type=int)
 parser.add_argument('--n_workers', help='num workers', default=8, type=int)
 parser.add_argument('--gpu', default=0, type=int)
@@ -86,9 +86,19 @@ model_list = [
 	# 'STCNFuseMatting_fullres_matnaive_ytvos',
 	# 'STCNFuseMatting_fullres_matnaive_ppm1236',
 	# '2stage',
-    'STCNFuseMatting_fullres_matnaive_woPPM',
-	'STCNFuseMatting_fullres_matnaive_woCBAM',
-
+    # 'STCNFuseMatting_fullres_matnaive_woPPM',
+	# 'STCNFuseMatting_fullres_matnaive_woCBAM',
+    # 'STCNFuseMatting_fullres_matnaive2',
+	# 'STCNFuseMatting_fullres_matnaive_wogru',
+	# 'STCNFuseMatting_fullres_matnaive_temp_seg_allclass',
+	# 'STCNFuseMatting_fullres_matnaive_fullmatte',
+	# 'STCNFuseMatting_fullres_matnaive4',
+	# 'STCNFuseMatting_fullres_matnaive3',
+	# 'STCNFuseMatting_fullres_matnaive_same_memque0.5',
+	# 'STCNFuseMatting_fullres_matnaive_normalce',
+	# 'STCNFuseMatting_fullres_matnaive_normalce_nonetemp',
+    
+    '2stage_seg4x'
 ]
 
 print(model_list)
@@ -151,6 +161,11 @@ elif args.size == 'hd':
     size = 'hd' # H, W
     dataset = VM240KValidationDataset(
         root='../dataset_mat/videomatte_motion_hd',
+        frames_per_item=frames_per_item, trimap_width=trimap_width, size=-1)
+elif args.size == '4k':
+    size = '4k' # H, W
+    dataset = VM240KValidationDataset(
+        root='../dataset_mat/videomatte_motion_4k',
         frames_per_item=frames_per_item, trimap_width=trimap_width, size=-1)
 else:
     flg = False

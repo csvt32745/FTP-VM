@@ -59,6 +59,7 @@ class Evaluator:
         self.true_dir = true_dir
         self.num_workers = num_workers
         self.is_fix_fgr = is_fix_fgr
+        # self.metrics = ['pha_mad', 'pha_sad', 'pha_mse', 'pha_grad', 'pha_dtssd']
         self.metrics = ['pha_mad', 'pha_sad', 'pha_mse', 'pha_grad', 'pha_conn', 'pha_dtssd']
         self.is_trimap_wise = is_trimap_wise
         if is_eval_fgr:
@@ -92,6 +93,7 @@ class Evaluator:
                 if os.path.isdir(os.path.join(self.pred_dir, dataset)):
 
                     for clip in sorted(os.listdir(os.path.join(self.pred_dir, dataset))):
+                        # print(dataset, clip)
                         if os.path.isdir(os.path.join(self.pred_dir, dataset, clip)):
                             future = executor.submit(self.evaluate_worker, dataset, clip, position)
                             tasks.append((dataset, clip, future))

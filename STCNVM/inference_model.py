@@ -565,6 +565,24 @@ class InferenceCoreRecurrentGFM(InferenceCoreRecurrent):
         del self.glance_outs
         del self.focus_outs
 
+    # def save_imgs(self, path):
+    #     name = self.name.replace('/', '_')
+    #     print(f"Save imgs: {path}, {name} ")
+    #     # save masks
+    #     pha_path = os.path.join(path, name, 'pha')
+    #     os.makedirs(pha_path, exist_ok=True)
+    #     masks = self.unpad_imgs(self.masks[:, 0]).numpy() # T, H, W
+    #     tris = self.unpad_imgs(self.glance_outs[:, 0]).numpy() # T, H, W
+
+    #     # save_trimap too
+    #     tri_path = os.path.join(path, name, 'trimap25')
+    #     os.makedirs(tri_path, exist_ok=True)
+
+    #     for i in range(self.current_out_t):
+    #         media.write_image(os.path.join(pha_path, f'{i:04d}.png'), masks[i])
+    #         media.write_image(os.path.join(tri_path, f'{i:04d}_trimap.png'), tris[i])
+    #     return
+
     def save_video(self, path):
         if self.save_start_idx > 0:
             return

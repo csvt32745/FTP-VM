@@ -4,6 +4,7 @@ parser = ArgumentParser()
 parser.add_argument('--root', help='input video root', required=True, type=str)
 parser.add_argument('--out_root', help='output video root', default='sd', type=str)
 parser.add_argument('--gpu', default=0, type=int)
+parser.add_argument('--target_size', default=1024, type=int)
 # parser.add_argument('--downsample_ratio', default=1, type=float)
 
 args = parser.parse_args()
@@ -24,9 +25,9 @@ input_resize=(1920, 1080)
 
 outroot = args.out_root
 # outroot = '/home/csvt32745/matte/footage_out'
-model_name = 'STCNFuseMatting_fullres_matnaive_none_temp_seg'
+# model_name = 'STCNFuseMatting_fullres_matnaive_none_temp_seg'
 # model_name = 'STCNFuseMatting_fullres_matnaive_wodata_seg_d646'
-# model_name = 'STCNFuseMatting_fullres_matnaive'
+model_name = 'STCNFuseMatting_fullres_matnaive'
 # downsample_ratio=0.5
 os.makedirs(outroot, exist_ok=True)
 def check_and_load_model_dict(model, state_dict: dict):
@@ -49,32 +50,41 @@ for vid in files:
     for tri in [i for i in files if i[:len(name)+1]==(name+"_") and 'trimap' in i]:
         # print(name, tri)
         suffix = tri.split('trimap')[-1].split('.')[0]
-
-        if os.path.isfile(os.path.join(outroot, name+suffix+"_com.mp4")):
-            print('skip ', name)
+        output_name = name+"_"+suffix
+        if os.path.isfile(os.path.join(outroot, output_name+"_com.mp4")):
+            print('Already finished, skip: ', name)
             continue
+        
+        mem_img = os.path.join(root, name+"_thumbnail.png")
+        mem_mask = os.path.join(root, tri)
+        if not os.path.isfile(mem_img):
+            print('Memory image not found, skip: ', mem_img)
+        if not os.path.isfile(mem_mask):
+            print('Memory mask not found, skip: ', mem_mask)
+
 
         convert_video(
             model,
             input_source = os.path.join(root, vid),
             # input_source = '/home/csvt32745/matte/OTVM/tmp_demo/holosum/frames',
             input_resize = input_resize,
-            memory_img = os.path.join(root, name+"_thumbnail.png"),
-            memory_mask = os.path.join(root, tri),
+            memory_img = mem_img,
+            memory_mask = mem_mask,
             # downsample_ratio=downsample_ratio,
             output_type='video',
-            output_composition = os.path.join(outroot, name+suffix+"_com.mp4"),
-            output_alpha = os.path.join(outroot, name+suffix+"_pha.mp4"),
-            output_foreground = os.path.join(outroot, name+suffix+"_fgr.mp4"),
+            output_composition = os.path.join(outroot, output_name+"_com.mp4"),
+            output_alpha = os.path.join(outroot, output_name+"_pha.mp4"),
+            output_foreground = os.path.join(outroot, output_name+"_fgr.mp4"),
 
             # output_type='png_sequence',
             # output_composition = os.path.join(outroot, 'test'),
 
-            output_video_mbps=2,
+            output_video_mbps=4,
             seq_chunk=1,
             num_workers=1,
             # seq_chunk=4,
             # num_workers=8,
+            target_size=args.target_size,
         )
 
 

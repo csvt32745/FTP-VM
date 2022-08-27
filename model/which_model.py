@@ -33,6 +33,8 @@ def get_model_by_string(input_string):
         'STCNFuseMatting_fullres_matnaive_l2gate': lambda: STCNFuseMatting_fullres_mat(mat_decoder='naive', trimap_fusion='gn', bottleneck_fusion='gate'),
         'STCNFuseMatting_fullres_matnaive2_seg3': lambda: STCNFuseMatting_fullres_mat(seg_decoder='4x_3', mat_decoder='naive2', trimap_fusion='gn'),
         'STCNFuseMatting_fullres_matnaive2': lambda: STCNFuseMatting_fullres_mat(mat_decoder='naive2', trimap_fusion='gn'),
+        'STCNFuseMatting_fullres_matnaive3': lambda: STCNFuseMatting_fullres_mat(mat_decoder='naive3', trimap_fusion='gn'),
+        'STCNFuseMatting_fullres_matnaive4': lambda: STCNFuseMatting_fullres_mat(mat_decoder='naive4', trimap_fusion='gn'),
         'STCNFuseMatting_fullres_matnaive_naivefuse': lambda: STCNFuseMatting_fullres_mat(mat_decoder='naive', trimap_fusion='naive'),
         'STCNFuseMatting_fullres_matnaive_seg3': lambda: STCNFuseMatting_fullres_mat(mat_decoder='naive', trimap_fusion='gn', seg_decoder='4x_3'),
         'STCNFuseMatting_fullres_mat_big': lambda: STCNFuseMatting_fullres_mat_big(mat_decoder='naive', trimap_fusion='gn'),
@@ -44,6 +46,7 @@ def get_model_by_string(input_string):
         'STCNFuseMatting_fullres_matnaive_seg-gru': lambda: STCNFuseMatting_fullres_mat(mat_decoder='naive', seg_decoder='4x-gru', trimap_fusion='gn'),
         'STCNFuseMatting_fullres_matnaive_wogru': lambda: STCNFuseMatting_fullres_mat(mat_decoder='naive-gru', seg_decoder='4x-gru', trimap_fusion='gn'),
         '2stage':  SeperateNetwork,
+        '2stage_seg4x':  lambda: SeperateNetwork(seg='4x'),
 
         'RVM': RVM,
 

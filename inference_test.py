@@ -40,7 +40,8 @@ def convert_video(model,
                   num_workers: int = 0,
                   progress: bool = True,
                   device: Optional[str] = None,
-                  dtype: Optional[torch.dtype] = torch.float32):
+                  dtype: Optional[torch.dtype] = torch.float32,
+                  target_size: int = 1024):
     
     """
     Args:
@@ -140,7 +141,7 @@ def convert_video(model,
             for src in reader:
 
                 if downsample_ratio is None:
-                    downsample_ratio = auto_downsample_ratio(*src.shape[2:])
+                    downsample_ratio = auto_downsample_ratio(*src.shape[2:], target=target_size)
                     print(downsample_ratio)
                 if memory is None:
                     memory = model.encode_imgs_to_value(m_img, m_mask, downsample_ratio=downsample_ratio)
@@ -189,7 +190,7 @@ def seg_to_trimap(logit):
     fg_mask = idx == 2
     return tran_mask*0.5 + fg_mask
 
-def auto_downsample_ratio(h, w, target=1024):
+def auto_downsample_ratio(h, w, target=512):
     """
     Automatically find a downsample ratio so that the largest side of the resolution be 512px.
     """
@@ -219,6 +220,7 @@ if __name__ == '__main__':
     parser.add_argument('--seq-chunk', type=int, default=1)
     parser.add_argument('--num-workers', type=int, default=0)
     parser.add_argument('--disable-progress', action='store_true')
+    parser.add_argument('--target_size', type=int, default=1024)
     args = parser.parse_args()
     
     device = 'cuda:%d' % args.gpu
@@ -248,7 +250,8 @@ if __name__ == '__main__':
         seq_chunk=args.seq_chunk,
         num_workers=args.num_workers,
         progress=not args.disable_progress,
-        device=device
+        device=device,
+        target_size=args.target_size,
     )
     
     

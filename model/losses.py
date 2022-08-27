@@ -101,7 +101,7 @@ class FocalLoss(nn.Module):
             c = x.shape[1]
             x = x.permute(0, *range(2, x.ndim), 1).reshape(-1, c)
             # (N, d1, d2, ..., dK) --> (N * d1 * ... * dK,)
-            y = y.view(-1)
+            y = y.reshape(-1)
 
         unignored_mask = y != self.ignore_index
         y = y[unignored_mask]
@@ -163,7 +163,7 @@ class SegLossComputer:
         
         if (size:= logits.size(2)) == 3:
             # GFM
-            label = get_label_from_trimap(data['trimap'])
+            label = get_label_from_trimap(data['trimap_query'])
             losses['seg_bce'] = self.gfm_loss(it, logits, label)
             if it >= self.start_tvloss:
                 losses['seg_tv'] = self.tvloss(logits, label)*self.lambda_tvloss
@@ -284,7 +284,7 @@ class MatLossComputer:
     def gfm_loss(self, it, data, gt_mask):
         loss = {}
         logits = data['glance']
-        trimap = data['trimap']
+        trimap = data['trimap_query']
         label = get_label_from_trimap(trimap)
         # loss['seg_bce'] = self.bsce(logits.flatten(0, 1), label.flatten(0, 1), it)
         loss['seg_bce'] = self.ce(logits.flatten(0, 1), label.flatten(0, 1))
@@ -302,7 +302,7 @@ class MatLossComputer:
     def full_matte_loss(self, it, data, gt_mask):
         loss = {}
         logits = data['glance']
-        trimap = data['trimap']
+        trimap = data['trimap_query']
         label = get_label_from_trimap(trimap)
         # loss['seg_bce'] = self.bsce(logits.flatten(0, 1), label.flatten(0, 1), it)
         loss['seg_bce'] = self.ce(logits.flatten(0, 1), label.flatten(0, 1))

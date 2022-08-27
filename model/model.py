@@ -50,6 +50,7 @@ class PropagationModel:
         self.random_memtrimap = para['random_memtrimap']
         self.memory_alpha = para['memory_alpha']
         self.memory_out_alpha_start = para['memory_out_alpha_start']
+        self.prob_same_mem_que = para['same_mem_que']
 
         if logger is not None:
             self.last_time = time.time()
@@ -132,8 +133,17 @@ class PropagationModel:
                 ret = self.PNet(mem_rgb, mem_rgb, mem_tri.repeat_interleave(2, dim=2))
                 alpha_out = ret[2] if len(ret) == 5 else ret[0] # collab or not
                 mem_tri = torch.cat([mem_tri, alpha_out], dim=2)
+        
+        if random.random() < self.prob_same_mem_que:
+            rgbq = rgb
+            data['trimap_query'] = trimap
+        else:
+            rgbq = rgb[:, 1:]
+            data['trimap_query'] = trimap[:, 1:]
+        ret = self.PNet(rgbq, rgb[:, [0]], mem_tri, segmentation_pass=True)
+        
+        # print(rgbq.size(1))
 
-        ret = self.PNet(rgb, rgb[:, [0]], mem_tri, segmentation_pass=True)
         logits = ret[0]
         out = {
             'logits': logits
@@ -142,17 +152,11 @@ class PropagationModel:
         if len(ret) >= 3:
             out['extra_outs'] = ret[-1]
 
-        if logits.size(1) == T:
-            # data['gt_query'] = gt
-            data['rgb_query'] = rgb
-        else:
-            # data['gt_query'] = gt[:, 1:]
-            data['rgb_query'] = rgb[:, 1:]
+        data['rgb_query'] = rgbq
 
         if logits.size(2) == 3:
             # GFM            
             out['mask'] = self.seg_to_trimap(logits)
-            data['trimap_query'] = trimap[:, 1:]
         else:
             out['mask'] = torch.sigmoid(logits)
 
@@ -172,7 +176,7 @@ class PropagationModel:
         fg = data['fg']
         gt = data['gt']
         bg = data['bg']
-        # trimap = data['trimap']
+        trimap = data['trimap']
         if self.compose_multiobj and random.random() < 0.5:
             rgb, bg = self.compose_multiobj_data(fg, bg, gt)
             data['rgb'] = rgb
@@ -197,8 +201,21 @@ class PropagationModel:
                 ret = self.PNet(mem_rgb, mem_rgb, mem_tri.repeat_interleave(2, dim=2))
                 alpha_out = ret[2] if len(ret) == 5 else ret[0] # collab or not
                 mem_tri = torch.cat([mem_tri, alpha_out], dim=2)
-            
-        ret = self.PNet(rgb, rgb[:, [0]], mem_tri, segmentation_pass=False)
+
+        if rgb.size(1) <= 4 or random.random() < self.prob_same_mem_que:
+            rgbq = rgb
+            data['trimap_query'] = trimap
+            data['gt_query'] = gt
+        else:
+            rgbq = rgb[:, 1:]
+            data['gt_query'] = gt[:, 1:]
+            data['rgb_query'] = rgb
+            data['trimap_query'] = trimap[:, 1:]
+        
+        data['rgb_query'] = rgbq
+        # print(rgbq.size(1))
+
+        ret = self.PNet(rgbq, rgb[:, [0]], mem_tri, segmentation_pass=False)
         out = {}
         
         if (isinstance(ret[-1], list) and (ret[-1][0].size(2) == 1)) \
@@ -214,8 +231,6 @@ class PropagationModel:
         else:
             out['mask'] = ret[0]
 
-        data['gt_query'] = gt
-        data['rgb_query'] = rgb
         # data['fg_query'] = fg
         return data, out
 

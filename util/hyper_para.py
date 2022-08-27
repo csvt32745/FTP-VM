@@ -13,6 +13,7 @@ class HyperParameters():
         parser.add_argument('--full_matte', help='predict full matte in the matting decoder', action='store_true')
         parser.add_argument('--lambda_segtv', help='lambda of segmentation consistency(total variation loss)', default=10, type=float)
         parser.add_argument('--start_segtv', help='start iteration of segmentation consistency(total variation loss)', default=-1, type=int)
+        parser.add_argument('--same_mem_que', help='memory frame also in query frames ', default=1, type=float)
         
         parser.add_argument('--split_trimap', help='split 1ch-trimap into 3ch masks', action='store_true')
         parser.add_argument('--memory_alpha', help='input memory alpha along with memory trimap', action='store_true')

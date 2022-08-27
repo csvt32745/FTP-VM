@@ -266,6 +266,8 @@ class STCNFuseMatting_fullres_mat(STCNFuseMatting):
             'naive': MattingDecoderFrom4x_feats_naive,
             'naive-gru': MattingDecoderFrom4x_feats_naive_woGRU,
             'naive2': MattingDecoderFrom4x_feats_naive2,
+            'naive3': MattingDecoderFrom4x_feats_naive3,
+            'naive4': MattingDecoderFrom4x_feats_naive4,
         }[mat_decoder](self.feat_channels, 
             [ch_bottleneck] + self.ch_seg, 
             self.ch_mat, gru=ConvGRU
@@ -432,11 +434,12 @@ class SingleTrimapPropagation(nn.Module):
 
         value_m = self.trimap_fuse(mimgs, masks, feats_m) # b, c, t, h, w
         feats_q[-1], _ = self.bottleneck_fuse(feats_q[-1], feats_m[-1], value_m, None)
-
         hid, *remain = self.decoder(qimgs, *feats_q, *rec_seg)
         # hid, rec1, rec2 ..., inter-feats
         rec_seg, feat_seg = remain[:-1], remain[-1]
         out_seg = self.project(hid)
+        if out_seg.size(-1) < qimgs.size(-1):
+            out_seg = F.interpolate(out_seg.flatten(0, 1), size=qimgs.shape[-2:], mode='bilinear').unflatten(0, out_seg.shape[:2])
         return out_seg, rec_seg
 
     def forward_with_memory(self, qimgs: Tensor, m_feat16: Tensor, m_value: Tensor, rec_seg = None):
@@ -450,12 +453,27 @@ class SingleTrimapPropagation(nn.Module):
         # hid, rec1, rec2 ..., inter-feats
         rec_seg, feat_seg = remain[:-1], remain[-1]
         out_seg = self.project(hid)
+        if out_seg.size(-1) < qimgs.size(-1):
+            out_seg = F.interpolate(out_seg.flatten(0, 1), size=qimgs.shape[-2:], mode='bilinear').unflatten(0, out_seg.shape[:2])
         return out_seg, rec_seg
 
     def encode_imgs_to_value(self, imgs, masks):
         feat = self.backbone(imgs)
         values = self.trimap_fuse(imgs, masks, feat) # b, c, t, h, w
         return feat[-1], values
+
+class SingleTrimapPropagation4x(SingleTrimapPropagation):
+    def __init__(self, backbone_arch='mobilenetv3_large_100', backbone_pretrained=True, ch_bottleneck=128, ch_key=32, ch_decode=[96, 48, 32, 16], ch_mask=1):
+        super().__init__(backbone_arch, backbone_pretrained, ch_bottleneck, ch_key, ch_decode, ch_mask)
+        del self.decoder
+        # Decoder
+        self.ch_seg = ch_decode # 8, 4, out
+        self._decoder = SegmentationDecoderTo4x(self.feat_channels, ch_decode)
+        self.project = Projection(self.ch_seg[2], 3)
+
+        self.default_rec = self._decoder.default_rec
+        self.decoder = lambda qimgs, f2, f4, f8, f16, *rec_seg: \
+            self._decoder(qimgs, *self.avgpool(qimgs)[1:3], f8, f16, *rec_seg)    
 
 class SingleMatting(nn.Module):
     def __init__(
@@ -505,10 +523,13 @@ class SingleMatting(nn.Module):
 
 
 class SeperateNetwork(nn.Module):
-    def __init__(self):
+    def __init__(self, seg='default'):
         super().__init__()
+        self.seg = {
+            'default': SingleTrimapPropagation,
+            '4x': SingleTrimapPropagation4x,
+        }[seg]()
 
-        self.seg = SingleTrimapPropagation()
         self.mat = SingleMatting()
         self.refiner = FastGuidedFilterRefiner()
         self.default_rec = [self.seg.default_rec, self.mat.default_rec]

@@ -354,6 +354,70 @@ class MattingDecoderFrom4x_feats_naive2(nn.Module):
         out = self.out(x1.flatten(0, 1)).unflatten(0, bt)
         return out, r1, r2, [x1, x2, x4_1]
 
+class MattingDecoderFrom4x_feats_naive3(nn.Module):
+    def __init__(self, feature_channels, ch_skips, ch_decode, gru=ConvGRU):
+        super().__init__()
+        assert len(ch_decode) == 4
+        # self.gated_s16 = get_conv_relu_bn(ch_skips[0], ch_decode[0]//2, 1)
+        self.gated_s4 = get_conv_relu_bn(ch_skips[2], ch_decode[0], 1)
+        self.decode0 = get_conv_relu_bn(ch_decode[0]+3, ch_decode[0], 3, 1, 1)
+        self.decode0_1 = get_conv_relu_bn(feature_channels[1]+ch_decode[0], ch_decode[0], 3, 1, 1)
+        # self.decode1 = UpsampleBlock(feature_channels[0]+3, ch_feat, ch_feat)
+        # self.decode2 = UpsampleBlock(3, ch_feat, ch_feat)
+        self.decode1 = GRUUpsamplingBlock(ch_decode[0], feature_channels[0], 3, ch_decode[1], gru=gru)
+        self.decode2 = GRUUpsamplingBlockWithoutSkip(ch_decode[1], 3, ch_decode[2], gru=gru)
+        self.out = get_conv_relu_bn(ch_decode[2], ch_decode[3], 3, 1, 1)
+
+        self.default_rec = [None, None]
+
+    def forward(self,
+                img1: Tensor, img2: Tensor, img4: Tensor,
+                f2: Tensor, f4: Tensor,
+                s4: Tensor, s16: Tensor,
+                r1: Optional[Tensor], r2: Optional[Tensor]):
+        bt = img1.shape[:2]
+        # s16 = F.interpolate(self.gated_s16(s16.flatten(0, 1)), scale_factor=(4, 4)) # 16 -> 4
+        s4 = self.gated_s4(s4.flatten(0, 1))
+        
+        x4 = self.decode0(torch.cat([s4, img4.flatten(0, 1)], dim=1))
+        x4_1 = self.decode0_1(torch.cat([f4.flatten(0, 1), x4], dim=1)).unflatten(0, bt)
+        x2, r2 = self.decode1(x4_1, f2, img2, r2) # 4 -> 2
+        x1, r1 = self.decode2(x2, img1, r1) # 2 -> 1
+        out = self.out(x1.flatten(0, 1)).unflatten(0, bt)
+        return out, r1, r2, [x1, x2, x4_1]
+
+class MattingDecoderFrom4x_feats_naive4(nn.Module):
+    def __init__(self, feature_channels, ch_skips, ch_decode, gru=ConvGRU):
+        super().__init__()
+        assert len(ch_decode) == 4
+        self.gated_s16 = get_conv_relu_bn(ch_skips[0], ch_decode[0]//2, 1)
+        self.gated_s4 = get_conv_relu_bn(ch_skips[2], ch_decode[0]//2, 1)
+        self.decode0 = ResBlock(ch_decode[0]+3, ch_decode[0])
+        self.decode0_1 = GRUBlock(feature_channels[1]+ch_decode[0], ch_decode[0])
+        # self.decode1 = UpsampleBlock(feature_channels[0]+3, ch_feat, ch_feat)
+        self.decode1 = GRUUpsamplingBlock(ch_decode[0], feature_channels[0], 3, ch_decode[1], gru=gru)
+        # self.decode2 = GRUUpsamplingBlockWithoutSkip(ch_decode[1], 3, ch_decode[2], gru=gru)
+        self.decode2 = UpsampleBlock(3, ch_decode[1], ch_decode[2])
+        self.out = ResBlock(ch_decode[2], ch_decode[3])
+
+        self.default_rec = [None, None]
+
+    def forward(self,
+                img1: Tensor, img2: Tensor, img4: Tensor,
+                f2: Tensor, f4: Tensor,
+                s4: Tensor, s16: Tensor,
+                r2: Optional[Tensor], r4: Optional[Tensor]):
+        bt = img1.shape[:2]
+        s16 = F.interpolate(self.gated_s16(s16.flatten(0, 1)), scale_factor=(4, 4)) # 16 -> 4
+        s4 = self.gated_s4(s4.flatten(0, 1))
+        
+        x4 = self.decode0(torch.cat([s4, s16, img4.flatten(0, 1)], dim=1))
+        x4_1, r4 = self.decode0_1(torch.cat([f4, x4.unflatten(0, bt)], dim=2), r4)
+        x2, r2 = self.decode1(x4_1, f2, img2, r2) # 4 -> 2
+        x1 = self.decode2(x2, img1) # 2 -> 1
+        out = self.out(x1.flatten(0, 1)).unflatten(0, bt)
+        return out, r2, r4, [x1, x2, x4_1]
+
 class CrossSpatialAttentation(nn.Module):
     def __init__(self, ch_in, ch_skip, ch_out=-1, spatial_only=False):
         super().__init__()
