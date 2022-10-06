@@ -143,11 +143,12 @@ class SegLossComputer:
         self.para = para
         self.bce = nn.BCEWithLogitsLoss()
         self.bsce = BootstrappedCE()
-        assert (celoss_type:=para['celoss_type']) in ['focal', 'normal', 'normal_weight']
+        assert (celoss_type:=para['celoss_type']) in ['focal', 'normal', 'normal_weight', 'focal_weight']
         self.ce = {
             'focal': FocalLoss,
             'normal': nn.CrossEntropyLoss,
             'normal_weight': lambda: nn.CrossEntropyLoss(weight=torch.FloatTensor([1, 3, 1])).cuda(),
+            'focal_weight': lambda: FocalLoss(alpha=torch.FloatTensor([1, 3, 1])).cuda(),
         }[celoss_type]()
         self.avg2d = nn.AvgPool3d((1, 2, 2))
         self.avg2d_bg = nn.AvgPool3d((1, 4, 4))
@@ -217,11 +218,12 @@ class MatLossComputer:
         super().__init__()
         self.para = para
         self.lapla_loss = LapLoss(max_levels=5).cuda()
-        assert (celoss_type:=para['celoss_type']) in ['focal', 'normal', 'normal_weight']
+        assert (celoss_type:=para['celoss_type']) in ['focal', 'normal', 'normal_weight', 'focal_weight']
         self.ce = {
             'focal': FocalLoss,
             'normal': nn.CrossEntropyLoss,
             'normal_weight': lambda: nn.CrossEntropyLoss(weight=torch.FloatTensor([1, 3, 1])).cuda(),
+            'focal_weight': lambda: FocalLoss(alpha=torch.FloatTensor([1, 3, 1])).cuda(),
         }[celoss_type]()
         self.bsce = BootstrappedCE()
         self.spatial_grad = K.filters.SpatialGradient()
@@ -496,6 +498,7 @@ class TotalVariationLoss(nn.Module):
             'temp_seg_allclass': lambda p, t: self.seg_inconsistency_temp_all_class(p, t, self.mask_weighted_avg),
             'temp_seg_allclass_mean': lambda p, t: self.seg_inconsistency_temp_all_class(p, t, self.mean_weighted_avg),
             'temp_seg_allclass_weight': lambda p, t: self.seg_inconsistency_temp_all_class_with_weight(p, t),
+            'temp_seg_allclass_weight_l2': lambda p, t: self.seg_inconsistency_temp_all_class_with_weight_l2(p, t),
             
             '3d_seg': lambda p, t: self.seg_inconsistency_3d(p, t),
             '3d_seg_allclass': lambda p, t: self.seg_inconsistency_3d_all_class(p, t, self.mask_weighted_avg),
@@ -705,6 +708,46 @@ class TotalVariationLoss(nn.Module):
         right_pred_mask = right_pred[:, :-1] | right_pred[:, 1:]
         diff_pred = torch.abs(output[:, :-1] - output[:, 1:]) 
         # diff_pred_true = torch.gather(diff_pred, dim=2, index=target_select[:, :-1]).unsqueeze(dim=2)
+        mask = right_pred_mask.to(dtype=output.dtype) * self.dilation(target[:, :-1] != target[:, 1:])
+        # t = diff_pred_true * mask
+        return weighted_avg(diff_pred, mask.unsqueeze(dim=2), gt_onehot[:, :-1])
+
+    def seg_inconsistency_temp_all_class_with_weight_thre20(self, output, target, trueclass_lambda=0.5, otherclass_lambda=0.25):
+
+        pred = torch.argmax(output, dim=2).to(dtype=target.dtype)
+        right_pred = (target == pred)
+        gt_onehot = F.one_hot(target, num_classes=3) # b, t, h, w, 3
+        gt_onehot = gt_onehot.permute(0, 1, 4, 2, 3)# b, t, 3, h, w
+        trueclass_lambda = trueclass_lambda-otherclass_lambda
+
+        def weighted_avg(x, m, g):
+            m = (g*trueclass_lambda + otherclass_lambda)*m
+            return (x*m).sum() / (m.sum() + 1e-5)
+
+        # T
+        right_pred_mask = right_pred[:, :-1] | right_pred[:, 1:]
+        thre_mask = (output[:, :-1] > 0.2) | right_pred[:, 1:]
+        diff_pred = torch.abs(output[:, :-1] - output[:, 1:]) 
+        # diff_pred_true = torch.gather(diff_pred, dim=2, index=target_select[:, :-1]).unsqueeze(dim=2)
+        mask = right_pred_mask.to(dtype=output.dtype) * self.dilation(target[:, :-1] != target[:, 1:])
+        # t = diff_pred_true * mask
+        return weighted_avg(diff_pred, mask.unsqueeze(dim=2), gt_onehot[:, :-1])
+
+    def seg_inconsistency_temp_all_class_with_weight_l2(self, output, target, trueclass_lambda=0.5, otherclass_lambda=0.25):
+
+        pred = torch.argmax(output, dim=2).to(dtype=target.dtype)
+        right_pred = (target == pred)
+        gt_onehot = F.one_hot(target, num_classes=3) # b, t, h, w, 3
+        gt_onehot = gt_onehot.permute(0, 1, 4, 2, 3)# b, t, 3, h, w
+        trueclass_lambda = trueclass_lambda-otherclass_lambda
+
+        def weighted_avg(x, m, g):
+            m = (g*trueclass_lambda + otherclass_lambda)*m
+            return (x*m).sum() / (m.sum() + 1e-5)
+
+        # T
+        right_pred_mask = right_pred[:, :-1] | right_pred[:, 1:]
+        diff_pred = torch.square(output[:, :-1] - output[:, 1:]) 
         mask = right_pred_mask.to(dtype=output.dtype) * self.dilation(target[:, :-1] != target[:, 1:])
         # t = diff_pred_true * mask
         return weighted_avg(diff_pred, mask.unsqueeze(dim=2), gt_onehot[:, :-1])

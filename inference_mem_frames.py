@@ -1,11 +1,14 @@
 from argparse import ArgumentParser
 
 parser = ArgumentParser()
-parser.add_argument('--size', help='eval video size: sd, 1024', default='sd', type=str)
+parser.add_argument('--size', help='eval video size: sd, 1024', default='1024', type=str)
 parser.add_argument('--frames_per_item', help='frames in a batch', default=10, type=int)
 parser.add_argument('--n_workers', help='num workers', default=8, type=int)
 parser.add_argument('--gpu', default=0, type=int)
 parser.add_argument('--disable_video', help='Without savinig videos', action='store_true')
+parser.add_argument('--replace_tri', help='Replace the output seg by mem trimap', action='store_true')
+parser.add_argument('--trimap_width', default=25, type=int)
+
 # parser.add_argument('--memory_freq', help='update memory in n frames, 0 for every frames', default=-1, type=int)
 args = parser.parse_args()
 
@@ -29,16 +32,16 @@ from inference_model_list import inference_model_list
 
 model_list = [
     # 'STCNFuseMatting_fullres_480_temp_seg_allclass_weight_x1',
-	# 'STCNFuseMatting_fullres_matnaive',
+	'STCNFuseMatting_fullres_matnaive',
     # 'STCNFuseMatting_fullres_matnaive_480_temp_seg',
     # 'STCNFuseMatting_fullres_matnaive_seg2_480_temp_seg_allclass',
     # 'STCNFuseMatting_fuse=naive_480',
     # 'STCNFuseMatting_fullres_480_none_temp_seg'
-	'STCNFuseMatting_fullres_matnaive_backbonefuse',
-    'STCNFuseMatting_fullres_matnaive_naivefuse',
-	'STCNFuseMatting_fullres_matnaive_none_temp_seg',
-    'STCNFuseMatting_SingleDec',
-    'STCNFuseMatting_SameDec_480'
+	# 'STCNFuseMatting_fullres_matnaive_backbonefuse',
+    # 'STCNFuseMatting_fullres_matnaive_naivefuse',
+	# 'STCNFuseMatting_fullres_matnaive_none_temp_seg',
+    # 'STCNFuseMatting_SingleDec',
+    # 'STCNFuseMatting_SameDec_480'
 ]
 print(model_list)
 model_list = [inference_model_list[i] for i in model_list]
@@ -48,10 +51,11 @@ print(args)
 assert args.size in ['sd', '1024']
 
 # memory_freqs = [120, 240, 480]
-memory_freqs = [1]
-# memory_freqs = [30, 60, 120, 240, 480]
+# memory_freqs = [1, 30, 60, 120]
+memory_freqs = [30, 60, 120, 240, 480, 1]
 frames_per_item = args.frames_per_item
-trimap_width = 25
+# trimap_width = 25
+trimap_width = args.trimap_width
 
 # memory would be updated (or not) after finishing each batch (item)
 print("Memory updated frequencies:",  memory_freqs)
@@ -89,24 +93,24 @@ dataset_list.append((root, dataset_name, dataset))
 # =========================
 # realhuman dataset
 
-for dataset_name, realhuman in [
-    ('realhuman_allframe', RealhumanDataset_AllFrames),
-    # ('realhuman', RealhumanDataset),
-]:
-    # flg = True
-    # if args.size == 'sd':
-    #     size = 256
-    #     dataset = realhuman(
-    #         root='../dataset_mat/real_human_256',
-    #         frames_per_item=frames_per_item, size=-1)
-    if args.size == '1024':
-        size = [576, 1024] # H, W
-        dataset = realhuman(
-            root='../dataset_mat/real_human_1024',
-            frames_per_item=frames_per_item, size=-1)
+# for dataset_name, realhuman in [
+#     ('realhuman_allframe', RealhumanDataset_AllFrames),
+#     # ('realhuman', RealhumanDataset),
+# ]:
+#     # flg = True
+#     # if args.size == 'sd':
+#     #     size = 256
+#     #     dataset = realhuman(
+#     #         root='../dataset_mat/real_human_256',
+#     #         frames_per_item=frames_per_item, size=-1)
+#     if args.size == '1024':
+#         size = [576, 1024] # H, W
+#         dataset = realhuman(
+#             root='../dataset_mat/real_human_1024',
+#             frames_per_item=frames_per_item, size=-1)
         
-        root = dataset_name+"_"+get_size_name(size)
-        dataset_list.append((root, dataset_name, dataset))
+#         root = dataset_name+"_"+get_size_name(size)
+#         dataset_list.append((root, dataset_name, dataset))
 
 # =========================
 
@@ -140,11 +144,16 @@ for mem_freq in memory_freqs:
         for model_name, model_func, inference_core, model_path in model_list:
             if type(model_func) == str:
                 model_func = get_model_by_string(model_func)
-                
+
+            if args.replace_tri:
+                model_name = model_name+'_replace-tri'
             model_name_freq = f"{model_name}_mem{mem_freq}f"
+            
+            if trimap_width != 25:
+                model_name_freq = model_name_freq + f"_width{trimap_width}"
             run_evaluation(
                 root=root, 
                 model_name=model_name_freq, model_func=model_func, model_path=model_path,
                 inference_core_func=inference_core,
                 dataset_name=dataset_name, dataset=dataset, dataloader=loader, 
-                memory_freq=mem_freq, memory_gt=True, gt_name=gt_name, save_video=not args.disable_video)
+                memory_freq=mem_freq, memory_gt=True, gt_name=gt_name, save_video=not args.disable_video, replace_by_given_tri=args.replace_tri)

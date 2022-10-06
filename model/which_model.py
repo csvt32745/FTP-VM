@@ -42,6 +42,7 @@ def get_model_by_string(input_string):
         'STCNFuseMatting_fullres_matnaive_ppm1236': lambda: STCNFuseMatting_fullres_mat(mat_decoder='naive', trimap_fusion='gn', bottleneck_fusion='1236'),
         'STCNFuseMatting_fullres_matnaive_woPPM': lambda: STCNFuseMatting_fullres_mat(mat_decoder='naive', trimap_fusion='gn', bottleneck_fusion='woppm'),
         'STCNFuseMatting_fullres_matnaive_woCBAM': lambda: STCNFuseMatting_fullres_mat(mat_decoder='naive', trimap_fusion='gn', bottleneck_fusion='wocbam'),
+        'STCNFuseMatting_fullres_matnaive_woCBAMPPM': lambda: STCNFuseMatting_fullres_mat(mat_decoder='naive', trimap_fusion='gn', bottleneck_fusion='wocbamppm'),
         'STCNFuseMatting_fullres_matnaive_mat-gru': lambda: STCNFuseMatting_fullres_mat(mat_decoder='naive-gru', trimap_fusion='gn'),
         'STCNFuseMatting_fullres_matnaive_seg-gru': lambda: STCNFuseMatting_fullres_mat(mat_decoder='naive', seg_decoder='4x-gru', trimap_fusion='gn'),
         'STCNFuseMatting_fullres_matnaive_wogru': lambda: STCNFuseMatting_fullres_mat(mat_decoder='naive-gru', seg_decoder='4x-gru', trimap_fusion='gn'),
@@ -52,4 +53,3 @@ def get_model_by_string(input_string):
 
     }[which_model]
 
-    

@@ -18,8 +18,9 @@ from .basic_block import *
 from .bottleneck_fusion import *
 from .trimap_fusion import *
 from .decoder import *
-from .util import collaborate_fuse
+from .util import *
 from .module import *
+from util.tensor_util import pad_divide_by, unpad
 
 class STCNFuseMatting(nn.Module):
     def __init__(
@@ -64,6 +65,7 @@ class STCNFuseMatting(nn.Module):
             '1236': BottleneckFusion_PPM1236,
             'woppm': BottleneckFusion_woPPM,
             'wocbam': BottleneckFusion_woCBAM,
+            'wocbamppm': BottleneckFusion_woCBAMPPM,
         }[bottleneck_fusion](self.backbone.channels[-1], ch_key, self.backbone.channels[-1], ch_bottleneck)
 
         self.feat_channels = list(self.backbone.channels)
@@ -104,7 +106,8 @@ class STCNFuseMatting(nn.Module):
         rec_mat = None,
         rec_bottleneck = None,
         downsample_ratio: float = 1,
-        segmentation_pass: bool = False
+        segmentation_pass: bool = False,
+        replace_given_seg: bool = False,
     ):
         if rec_seg is None:
             rec_seg, rec_mat, rec_bottleneck = self.default_rec
@@ -119,8 +122,8 @@ class STCNFuseMatting(nn.Module):
 
         value_m = self.trimap_fuse(mimg_sm, mask_sm, feats_m) # b, c, t, h, w
         feats_q[-1], rec_bottleneck = self.bottleneck_fuse(feats_q[-1], feats_m[-1], value_m, rec_bottleneck)
-    
-        return self.decode(qimgs, qimg_sm, feats_q, segmentation_pass, is_refine, rec_seg, rec_mat, rec_bottleneck)
+        replace_seg = mask_sm if replace_given_seg else None
+        return self.decode(qimgs, qimg_sm, feats_q, segmentation_pass, is_refine, rec_seg, rec_mat, rec_bottleneck, replace_seg=replace_seg)
 
     def forward_with_memory(self, 
         qimgs: Tensor, m_feat16: Tensor, m_value: Tensor,
@@ -128,7 +131,7 @@ class STCNFuseMatting(nn.Module):
         rec_mat = None,
         rec_bottleneck = None,
         downsample_ratio: float = 1,
-        segmentation_pass: bool = False
+        segmentation_pass: bool = False,
     ):
         if rec_mat is None:
             rec_bottleneck, rec_seg, rec_mat = self.default_rec
@@ -151,6 +154,7 @@ class STCNFuseMatting(nn.Module):
         rec_seg = None,
         rec_mat = None,
         rec_bottleneck = None,
+        replace_seg = None,
     ):
         # Decode
         qimg_sm_avg = self.avgpool(qimg_sm) # 2, 4, 8
@@ -176,9 +180,19 @@ class STCNFuseMatting(nn.Module):
         )
         rec_mat, feats = remain[:-1], remain[-1]
         out_mat = torch.sigmoid(self.mat_project(hid))
-        out_collab = collaborate_fuse(out_seg, out_mat)
+        if replace_seg is None:
+            out_collab = collaborate_fuse(out_seg, out_mat)
+        else:
+            t = replace_seg.size(1)
+            out_collab = torch.zeros_like(out_mat)
+            out_collab[:, :t] = collaborate_fuse_trimap(replace_seg, out_mat[:, :t])
+            if out_mat.size(1) > t:
+                out_collab[:, t:] = collaborate_fuse(out_seg[:, t:], out_mat[:, t:])
+
+
         if is_refine:
-            self.tmp_out_collab = F.interpolate(out_collab.detach().flatten(0, 1), qimgs.shape[-2:], mode='bilinear', align_corners=False).unflatten(0, qimgs.shape[:2])
+            # self.tmp_out_collab = F.interpolate(out_collab.detach().flatten(0, 1), qimgs.shape[-2:], mode='bilinear', align_corners=False).unflatten(0, qimgs.shape[:2])
+            # out_collab = self.tmp_out_collab
             out_collab = self.refiner(qimgs, qimg_sm, out_collab)
 
         return [out_seg, out_mat, out_collab, [rec_seg, rec_mat, rec_bottleneck], feats]
@@ -217,10 +231,12 @@ class STCNFuseMatting(nn.Module):
             B, T = x.shape[:2]
             x = F.interpolate(x.flatten(0, 1), scale_factor=scale_factor,
                 mode='bilinear', align_corners=False, recompute_scale_factor=False)
+            x, _ = pad_divide_by(x, 16)
             x = x.unflatten(0, (B, T))
         else:
             x = F.interpolate(x, scale_factor=scale_factor,
                 mode='bilinear', align_corners=False, recompute_scale_factor=False)
+            x, _ = pad_divide_by(x, 16)
         return x
 
 class STCNFuseMatting_big(STCNFuseMatting):

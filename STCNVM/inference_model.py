@@ -371,6 +371,7 @@ class InferenceCoreRecurrent(InferenceCore):
         downsample_ratio=1,
         memory_save_iter=-1,
         memory_bank_size=5,
+        replace_by_given_tri=False,
     ):
         super().__init__(model, dataset, loader_iter, pad, last_data, downsample_ratio=downsample_ratio)
         self.disable_recurrent = disable_recurrent
@@ -390,6 +391,8 @@ class InferenceCoreRecurrent(InferenceCore):
             else 1e7
         self.save_bg = False
         self.downsample_ratio = downsample_ratio
+        self.mem_idx = -1
+        self.replace_by_given_tri = replace_by_given_tri
     
     # def _forward(self, query_imgs, memory_img, memory_mask):
     #     ret = self.model.forward(query_imgs, memory_img, memory_mask, *self.gru_mems, downsample_ratio=self.downsample_ratio)
@@ -412,7 +415,7 @@ class InferenceCoreRecurrent(InferenceCore):
     #             self.bgs = torch.cat([self.bgs, bg[0, :, :3].cpu()], 0)
     #     return pha
     
-    def _forward(self, query_imgs):
+    def _forward(self, query_imgs, memory_img, memory_mask, replace_tri=False):
         # ret = self.model.forward(query_imgs, memory_img, memory_mask, *self.gru_mems, downsample_ratio=self.downsample_ratio)
         ret = self.model.forward_with_memory(query_imgs, *self.memory_bank.get_memory(), *self.gru_mems, self.downsample_ratio)
         if self.disable_recurrent:
@@ -462,18 +465,20 @@ class InferenceCoreRecurrent(InferenceCore):
             while self.current_t < end:
                 self.add_images_from_loader()
             rgb = self.images[start:end].unsqueeze(0).cuda() # 1 T 3 H W
+            replace_tri = False
 
             if self.memory_iter >= 0 and frame_count >= self.memory_iter:
                 mem_rgb = self.get_memory_img(start).unsqueeze(0).unsqueeze(0).cuda()
                 mem_mask = self.get_memory_mask(start).unsqueeze(0).unsqueeze(0).cuda()
                 self.memory_bank.add_gt_memory(*self.model.encode_imgs_to_value(mem_rgb, mem_mask, self.downsample_ratio))
                 frame_count = 0
+                replace_tri = True
             
             if self.memory_save_iter > 0 and frame_count_savemem >= self.memory_save_iter:
                 frame_count_savemem = frame_count_savemem-self.memory_save_iter
                 self.add_memory_bank(start-frame_count_savemem-1)
             time_start = time()
-            out = self.forward(rgb, mem_rgb, mem_mask)
+            out = self.forward(rgb, mem_rgb, mem_mask, replace_tri=(replace_tri and self.replace_by_given_tri))
             total_time += time()-time_start
             
             if self.downsample_ratio != 1 and tmp_save_root != '':
@@ -499,8 +504,8 @@ class InferenceCoreRecurrent(InferenceCore):
         raise NotImplementedError
 
 class InferenceCoreRecurrentGFM(InferenceCoreRecurrent):
-    def __init__(self, model: STCNFuseMatting, dataset: VM108ValidationDataset, loader_iter, pad=16, last_data=None, memory_gt=False, memory_iter=False, memory_bg=False, downsample_ratio=1., memory_save_iter=-1, memory_bank_size=5):
-        super().__init__(model, dataset, loader_iter, pad, last_data, memory_gt, memory_iter, memory_bg=memory_bg, downsample_ratio=downsample_ratio, memory_save_iter=memory_save_iter, memory_bank_size=memory_bank_size)
+    def __init__(self, model: STCNFuseMatting, dataset: VM108ValidationDataset, loader_iter, pad=16, last_data=None, memory_gt=False, memory_iter=False, memory_bg=False, downsample_ratio=1., memory_save_iter=-1, memory_bank_size=5, replace_by_given_tri=False,):
+        super().__init__(model, dataset, loader_iter, pad, last_data, memory_gt, memory_iter, memory_bg=memory_bg, downsample_ratio=downsample_ratio, memory_save_iter=memory_save_iter, memory_bank_size=memory_bank_size, replace_by_given_tri=replace_by_given_tri)
 
         self.glance_outs = None
         self.focus_outs = None
@@ -508,14 +513,17 @@ class InferenceCoreRecurrentGFM(InferenceCoreRecurrent):
 
     def add_memory_bank(self, idx):
         # print("Add mem: ", idx)
+        self.mem_idx = idx
         rgb = self.images[idx].unsqueeze(0).unsqueeze(0).cuda()
         # tri = self.trimaps[idx].unsqueeze(0).unsqueeze(0).cuda()
         tri = self.glance_outs[idx].unsqueeze(0).unsqueeze(0).cuda()
         self.memory_bank.add_memory(*self.model.encode_imgs_to_value(rgb, tri), self.downsample_ratio)
 
-    def _forward(self, query_imgs, memory_img, memory_mask):
-        glance, focus, pha, gru_mems, bg = self.model.forward_with_memory(query_imgs, *self.memory_bank.get_memory(), *self.gru_mems, downsample_ratio=self.downsample_ratio)
-        # glance, focus, pha, gru_mems, bg = self.model.forward(query_imgs, memory_img, memory_mask, *self.gru_mems, downsample_ratio=self.downsample_ratio)
+    def _forward(self, query_imgs, memory_img, memory_mask, replace_tri=False):
+        if self.memory_save_iter < 0 and replace_tri:
+            glance, focus, pha, gru_mems, bg = self.model.forward(query_imgs, memory_img, memory_mask, *self.gru_mems, downsample_ratio=self.downsample_ratio, replace_given_seg=replace_tri)
+        else:
+            glance, focus, pha, gru_mems, bg = self.model.forward_with_memory(query_imgs, *self.memory_bank.get_memory(), *self.gru_mems, downsample_ratio=self.downsample_ratio)
 
         if not self.disable_recurrent:
             self.gru_mems = gru_mems

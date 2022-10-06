@@ -150,7 +150,7 @@ class Evaluator:
         framenames = sorted(os.listdir(os.path.join(self.true_dir, dataset, clip, 'pha')))
         framenames_pred = sorted(os.listdir(os.path.join(self.pred_dir, dataset, clip, 'pha')))
         if len(notfound:=(set(framenames)-set(framenames_pred))) > 0:
-            print('Pred Frame not found:' + list(notfound))
+            print('Pred Frame not found:' + str(list(notfound)))
             
         prefixes = ['', 'fg_', 'tran_', 'bg_']
         if self.is_trimap_wise:

@@ -1,10 +1,10 @@
 
-	('2stage_seg4x', '2stage_seg4x', InferenceCoreRecurrentGFM, 
-	'./saves/Aug26_22.03.23_2stage_seg4x/Aug26_22.03.23_2stage_seg4x_120000.pth'),
-	('STCNFuseMatting_fullres_matnaive_normalce_nonetemp', 'STCNFuseMatting_fullres_matnaive', InferenceCoreRecurrentGFM, 
-	'./saves/Aug26_19.03.29_STCNFuseMatting_fullres_matnaive_normalce_nonetemp/Aug26_19.03.29_STCNFuseMatting_fullres_matnaive_normalce_nonetemp_120000.pth'),
+	('STCNFuseMatting_fullres_matnaive_woCBAMPPM', 'STCNFuseMatting_fullres_matnaive_woCBAMPPM', InferenceCoreRecurrentGFM, 
+	'./saves/Sep14_12.05.40_STCNFuseMatting_fullres_matnaive_woCBAMPPM/Sep14_12.05.40_STCNFuseMatting_fullres_matnaive_woCBAMPPM_120000.pth'),
+	('STCNFuseMatting_fullres_matnaive_woCBAM', 'STCNFuseMatting_fullres_matnaive_woCBAM', InferenceCoreRecurrentGFM, 
+	'./saves/Sep14_12.05.21_STCNFuseMatting_fullres_matnaive_woCBAM/Sep14_12.05.21_STCNFuseMatting_fullres_matnaive_woCBAM_120000.pth'),
 
 
 
-	'2stage_seg4x',
-	'STCNFuseMatting_fullres_matnaive_normalce_nonetemp',
+	'STCNFuseMatting_fullres_matnaive_woCBAMPPM',
+	'STCNFuseMatting_fullres_matnaive_woCBAM',

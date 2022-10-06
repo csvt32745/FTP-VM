@@ -52,12 +52,23 @@ class BottleneckFusion_woPPM(BottleneckFusion):
 class BottleneckFusion_woCBAM(BottleneckFusion):
     def __init__(self, ch_in, ch_key, ch_value, ch_out, affinity='dotproduct'):
         super().__init__(ch_in, ch_key, ch_value, ch_out, affinity)
-        self.fuse = ResBlock2(ch_in+ch_value, ch_out)
+        self.fuse = ResBlock(ch_in+ch_value, ch_out)
     
     def forward(self, f16_q, f16_m, value_m, rec_bottleneck: Optional[Tensor]):
         f16_m = self.read_value(f16_q, f16_m, value_m)
         out = self.fuse(torch.cat([f16_q, f16_m], dim=2).flatten(0, 1)).unflatten(0, f16_m.shape[:2])
         out = self.bottleneck(out)
+        return out, rec_bottleneck
+
+class BottleneckFusion_woCBAMPPM(BottleneckFusion):
+    def __init__(self, ch_in, ch_key, ch_value, ch_out, affinity='dotproduct'):
+        super().__init__(ch_in, ch_key, ch_value, ch_out, affinity)
+        del self.bottleneck
+        self.fuse = ResBlock(ch_in+ch_value, ch_out)
+    
+    def forward(self, f16_q, f16_m, value_m, rec_bottleneck: Optional[Tensor]):
+        f16_m = self.read_value(f16_q, f16_m, value_m)
+        out = self.fuse(torch.cat([f16_q, f16_m], dim=2).flatten(0, 1)).unflatten(0, f16_m.shape[:2])
         return out, rec_bottleneck
 
 class BottleneckFusion_f16(BottleneckFusion):

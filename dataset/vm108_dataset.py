@@ -7,7 +7,7 @@ from PIL import Image
 import numpy as np
 import json
 import itertools
-import glob
+import random
 
 from dataset.range_transform import im_normalization, im_mean
 # from dataset.mask_perturb import perturb_mask
@@ -202,6 +202,7 @@ class VM108ValidationDatasetFixFG(VM108ValidationDataset):
 
 
 class VM240KValidationDataset(Dataset):
+    """ Just read the imgs, can be used in any dataset """
     def __init__(self, 
         root='../dataset_mat/videomatte_motion_sd', 
         size=-1, frames_per_item=0, trimap_width=25, get_bgr=False
@@ -321,6 +322,51 @@ class VM240KValidationDataset(Dataset):
     
     def get_num_frames(self, video):
         return self.num_frames_of_video[video]
+
+class ClipShuffleValidationDataset(VM240KValidationDataset):
+    """ Shuffle the split clips in the video with given clip-length """
+    def __init__(self, 
+            root='../dataset_mat/vm108_1024',
+            remap_path = '',
+            size=-1, 
+            frames_per_item=0, 
+            trimap_width=25, 
+            get_bgr=False,
+        ):
+        self.remap_path = remap_path
+        super().__init__(root, size, frames_per_item, trimap_width, get_bgr)
+        
+    def set_frames_per_item(self, frames_per_item):
+        if 'frames_per_item' in dir(self):
+            print("Set dataset batch from %d to %d" % (self.frames_per_item, frames_per_item))
+            if frames_per_item == self.frames_per_item:
+                return
+        self.frames_per_item = frames_per_item
+        self.prepare_frame_list()
+
+    
+    def prepare_frame_list(self):
+        self.idx_to_vid_and_chunk = []
+        self.num_frames_of_video = {}
+        self.videos = sorted(os.listdir(self.root))
+        frame_corr = json.load(open(self.remap_path))
+        random.seed(52728)
+
+        for vid in self.videos:
+            # vid/pha/0000.jpg -> 0000
+            # frames = [os.path.splitext(f)[0] for f in sorted(os.listdir(os.path.join(self.root, vid, 'pha')))]
+            frames = [os.path.splitext(f)[0] for f in frame_corr[vid]]
+            if len(frames) == 0:
+                print(f"{vid} doesn't have frames! ({len(frames)})")
+                continue
+            
+            self.num_frames_of_video[vid] = len(frames)
+            frames = split_frames(frames, self.frames_per_item)
+            self.idx_to_vid_and_chunk.extend(list(zip([vid]*len(frames), frames)))
+            # (vid: str, frames: [...])
+
+        self.dataset_length = len(self.idx_to_vid_and_chunk)
+        print('%d videos accepted in %s.' % (len(self.videos), self.root))
 
 class RealhumanDataset(Dataset):
     def __init__(self, 

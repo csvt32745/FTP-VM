@@ -16,13 +16,14 @@ from tqdm import tqdm
 from .util import get_dilated_trimaps, get_perturb_masks
 
 class YouTubeVISDataset(Dataset):
-    def __init__(self, videodir, annfile, size, seq_length, seq_sampler, transform=None, debug_data=None, random_memtrimap=False):
+    def __init__(self, videodir, annfile, size, seq_length, seq_sampler, transform=None, debug_data=None, random_memtrimap=False, none_trimap=False):
         self.videodir = videodir
         self.random_memtrimap = random_memtrimap
         self.size = size
         self.seq_length = seq_length
         self.seq_sampler = seq_sampler
         self.transform = transform
+        self.none_trimap = none_trimap
 
         print("Loading Youtube VIS annotation ...")
         if debug_data is None:
@@ -92,6 +93,9 @@ class YouTubeVISDataset(Dataset):
             'rgb': imgs,
             'gt': segs,
         }
+        if self.none_trimap:
+            return data
+        
         if self.random_memtrimap:
             data['trimap'] = get_dilated_trimaps(segs, 17, random_kernel=False)
             data['mem_trimap'] = get_dilated_trimaps(segs[[0]], np.random.randint(1, 16)*2+1, random_kernel=True)

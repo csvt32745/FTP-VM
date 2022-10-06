@@ -52,6 +52,7 @@ def run_evaluation(
     memory_freq=-1, memory_gt=True, memory_bg=False,
     gt_name='GT', downsample_ratio=1, save_video=True, 
     memory_save_iter=-1, memory_bank_size=5,
+    replace_by_given_tri=False,
     ):
     print(f"=" * 30)
     print(f"[ Current model: {model_name}, memory gt freq: {memory_freq}, memory save freq: {memory_save_iter}, memory bank size: {memory_bank_size} save video: {save_video}]")
@@ -75,7 +76,7 @@ def run_evaluation(
             model, dataset, loader_iter, last_data=last_data,
             memory_iter=memory_freq, memory_gt=memory_gt, memory_bg=memory_bg, 
             memory_save_iter=memory_save_iter, memory_bank_size=memory_bank_size,
-            downsample_ratio=downsample_ratio)
+            downsample_ratio=downsample_ratio, replace_by_given_tri=replace_by_given_tri)
         
         fps.append(run_inference(inference_core, pred_path, gt_path, dataset_name, tmp_save_root, save_video=save_video))
 

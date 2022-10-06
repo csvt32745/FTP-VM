@@ -28,6 +28,7 @@ outroot = args.out_root
 # model_name = 'STCNFuseMatting_fullres_matnaive_none_temp_seg'
 # model_name = 'STCNFuseMatting_fullres_matnaive_wodata_seg_d646'
 model_name = 'STCNFuseMatting_fullres_matnaive'
+# model_name = 'STCNFuseMatting_fullres_matnaive_same_memque0.5'
 # downsample_ratio=0.5
 os.makedirs(outroot, exist_ok=True)
 def check_and_load_model_dict(model, state_dict: dict):
@@ -67,7 +68,7 @@ for vid in files:
             model,
             input_source = os.path.join(root, vid),
             # input_source = '/home/csvt32745/matte/OTVM/tmp_demo/holosum/frames',
-            input_resize = input_resize,
+            # input_resize = input_resize,
             memory_img = mem_img,
             memory_mask = mem_mask,
             # downsample_ratio=downsample_ratio,
@@ -79,7 +80,7 @@ for vid in files:
             # output_type='png_sequence',
             # output_composition = os.path.join(outroot, 'test'),
 
-            output_video_mbps=4,
+            output_video_mbps=8,
             seq_chunk=1,
             num_workers=1,
             # seq_chunk=4,

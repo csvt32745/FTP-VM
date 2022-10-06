@@ -70,8 +70,14 @@ def convert_video(model,
     
     # Initialize transform
     if input_resize is not None:
+        s = Image.open(memory_img).size
+        if s[1] > s[0]:
+            print("Portrait video")
+            size = input_resize  
+        else: 
+            size = input_resize[::-1]
         transform = transforms.Compose([
-            transforms.Resize(input_resize[::-1]),
+            transforms.Resize(size),
             transforms.ToTensor()
         ])
     else:
@@ -164,13 +170,20 @@ def convert_video(model,
                     rgb = torch.cat([src[0], fgr[0]], dim=3)
                     ratio = target_height / rgb.size(2)
                     rgb = F.interpolate(rgb, scale_factor=(ratio, ratio))
-                    pha = F.interpolate(pha[0], scale_factor=(ratio, ratio))
 
-                    ratio = target_height / trimap.size(3)
-                    trimap = F.interpolate(trimap[0], scale_factor=(ratio, ratio))
+                    size = (rgb.size(-2), rgb.size(-1)//2)
+                    # print(rgb.shape, size)
+                    pha = F.interpolate(pha[0], size=size)# scale_factor=(ratio, ratio))
+
+                    # ratio = target_height / trimap.size(3)
+                    trimap = F.interpolate(trimap[0], size=size)#, scale_factor=(ratio, ratio))
                     
                     mask = torch.repeat_interleave(torch.cat([trimap, pha], dim=3), 3, dim=1)
-                    writer_com.write(torch.cat([rgb, mask], dim=2))
+                    w = min(rgb.size(-1), mask.size(-1))
+                    dim = 2 if size[0] < size[1] else 3
+                    out = torch.cat([rgb[..., :w], mask[..., :w]], dim=dim)
+                    # print(out.shape)
+                    writer_com.write(out)
                 
                 bar.update(src.size(1))
 
@@ -190,9 +203,9 @@ def seg_to_trimap(logit):
     fg_mask = idx == 2
     return tran_mask*0.5 + fg_mask
 
-def auto_downsample_ratio(h, w, target=512):
+def auto_downsample_ratio(h, w, target=1024):
     """
-    Automatically find a downsample ratio so that the largest side of the resolution be 512px.
+    Automatically find a downsample ratio so that the largest side of the resolution be 1024px.
     """
     # return min(target / min(h, w), 1)
     ratio = min(target / max(h, w), 1)

@@ -5,6 +5,7 @@ parser.add_argument('--size', help='eval video size: sd, 1024, hd, 4k', default=
 parser.add_argument('--batch_size', help='frames in a batch', default=8, type=int)
 parser.add_argument('--n_workers', help='num workers', default=8, type=int)
 parser.add_argument('--gpu', default=0, type=int)
+parser.add_argument('--trimap_width', default=25, type=int)
 parser.add_argument('--memory_bg', help='Given bg & zero-trimap as memory input', action='store_true')
 parser.add_argument('--disable_video', help='Without savinig videos', action='store_true')
 parser.add_argument('--downsample_ratio', default=1, type=float)
@@ -88,7 +89,7 @@ model_list = [
 	# '2stage',
     # 'STCNFuseMatting_fullres_matnaive_woPPM',
 	# 'STCNFuseMatting_fullres_matnaive_woCBAM',
-    # 'STCNFuseMatting_fullres_matnaive2',
+    'STCNFuseMatting_fullres_matnaive',
 	# 'STCNFuseMatting_fullres_matnaive_wogru',
 	# 'STCNFuseMatting_fullres_matnaive_temp_seg_allclass',
 	# 'STCNFuseMatting_fullres_matnaive_fullmatte',
@@ -98,7 +99,15 @@ model_list = [
 	# 'STCNFuseMatting_fullres_matnaive_normalce',
 	# 'STCNFuseMatting_fullres_matnaive_normalce_nonetemp',
     
-    '2stage_seg4x'
+	# 'STCNFuseMatting_fullres_matnaive_retry',
+	# 'STCNFuseMatting_fullres_matnaive_same_memque0.1',
+    # '2stage_seg4x'
+	# 'STCNFuseMatting_fullres_matnaive_tempweightl2',
+	# 'STCNFuseMatting_fullres_matnaive_focal_weight',
+	# 'STCNFuseMatting_fullres_matnaive_wo_seg',
+	'STCNFuseMatting_fullres_matnaive_woCBAMPPM',
+	'STCNFuseMatting_fullres_matnaive_woCBAM',
+    
 ]
 
 print(model_list)
@@ -118,7 +127,7 @@ def get_size_name(size):
     
 dataset_list = []
 frames_per_item = args.batch_size
-trimap_width = 25
+trimap_width = args.trimap_width
 downsample_ratio = args.downsample_ratio
 
 # =========================
@@ -231,6 +240,8 @@ for root, dataset_name, dataset in dataset_list:
         if downsample_ratio != 1:
             print('Downsample: ', downsample_ratio)
             model_name = model_name + f'_ds_{downsample_ratio:.4f}'
+        if trimap_width != 25:
+            model_name = model_name + f"_width{trimap_width}"
         run_evaluation(
             root=root, 
             model_name=model_name, model_func=model_func, model_path=model_path, 
