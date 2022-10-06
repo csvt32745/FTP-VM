@@ -16,6 +16,8 @@ class MemoryBank:
             self.mem_v = torch.cat([self.mem_v[:, :, :1], self.mem_v[:, :, -(self.top_k):]], dim=2).contiguous()
 
     def get_memory(self):
+        if self.mem_k is None:
+            return None
         if self.temp_k is not None:
             mk = torch.cat([self.mem_k, self.temp_k], 1)
             mv = torch.cat([self.mem_v, self.temp_v], 2)
