@@ -7,7 +7,7 @@ torch.set_grad_enabled(False)
 from torchvision import transforms
 from model.which_model import get_model_by_string
 from inference_model_list import inference_model_list
-from STCNVM.memory_bank import MemoryBank
+from FTPVM.memory_bank import MemoryBank
 
 class TrimapScribbler:
     def __init__(self, callback, display_ratio=1.):

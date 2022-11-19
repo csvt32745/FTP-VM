@@ -26,88 +26,13 @@ from dataset.vm108_dataset import *
 
 from inference_func import *
 from model.model import get_model_by_string
-from STCNVM.model import *
-from STCNVM.module import *
-from STCNVM.inference_model import *
+from FTPVM.model import *
+from FTPVM.module import *
+from FTPVM.inference_model import *
 from inference_model_list import inference_model_list
 
 model_list = [
-   
-    # 'STCNFuseMatting_fuse=naive',
-	# 'STCNFuseMatting_480',
-	# 'STCNFuseMatting',
-	# 'STCNFuseMatting_gru_before_fuse',
-	# 'STCNFuseMatting_fuse=fullres',
-	# 'STCNFuseMatting_randtri',
-
-	# 'STCNFuseMatting_fuse=fullgate',
-    # 'STCNFuseMatting_fuse=naive_480',
-	# 'STCNFuseMatting_fuse=intrimap_only',
-    # 'STCNFuseMatting_480_normalce',
-	# 'STCNFuseMatting_fuse=small',
-	# 'STCNFuseMatting_big',
-	# 'STCNFuseMatting_ytvos',
-	# 'STCNFuseMatting_fullres_mat',
-    # 'STCNFuseMatting_fuse=bn',
-
-    # 'STCNFuseMatting_SameDec_480',
-	# 'STCNFuseMatting_fuse=intrimap_only_fullres',
-	# 'STCNFuseMatting_fuse=bn_480',
-	# 'STCNFuseMatting_fuse=fullres',
-
-	# 'STCNFuseMatting_fuse=naive_480',
-	# 'STCNFuseMatting_fuse=bn_wo_consis_480',
-    # 'STCNFuseMatting_1xseg_4x2mat',
-	# 'STCNFuseMatting_fuse=bn_seg_consis_correctonly_480',
-	# 'STCNFuseMatting_fullresseg',
-	# 'STCNFuseMatting_fuse=gn_480',
-	# 'STCNFuseMatting_fuse=bn2_480',
-	# 'STCNFuseMatting_fullres_mat3_480',
-	# 'STCNFuseMatting_fullres_480_none_temp_seg',
-	# 'STCNFuseMatting_fullres_480_temp_seg_allclass_weight_x1',
-	# 'STCNFuseMatting_fullres_matnaive',
-    # 'STCNFuseMatting_fullres_matnaive_80k',
-    # 'STCNFuseMatting_fullres_matnaive_480_temp_seg',
-    # 'STCNFuseMatting_fullres_matnaive_seg2_480_temp_seg_allclass',
-	# 'STCNFuseMatting_fullres_gn_3chmask',
-	# 'STCNFuseMatting_SingleDec',
-	# 'STCNFuseMatting_SingleDec_big',
-	# 'STCNFuseMatting_fullres_matnaive_seg2_480_temp_seg_allclass_weight',
-	# 'STCNFuseMatting_fullres_matnaive_temp_seg_allclass_weight',
-    # 'RVM',
-	# 'STCNFuseMatting_fullres_matnaive_l2attn',
-	# 'STCNFuseMatting_fullres_matnaive2_seg3',
-    # 'STCNFuseMatting_fullres_matnaive_naivefuse',
-	# 'STCNFuseMatting_fullres_matnaive_l2gate',
-	# 'STCNFuseMatting_fullres_matnaive_backbonefuse',
-	# 'STCNFuseMatting_fullres_matnaive_multiobj',
-	# 'STCNFuseMatting_fullres_matnaive_none_temp_seg',
-    # 'STCNFuseMatting_fullres_matnaive_wodata_seg_d646',
-	# 'STCNFuseMatting_fullres_matnaive_memalpha',
-	# 'STCNFuseMatting_fullres_matnaive_ytvos',
-	# 'STCNFuseMatting_fullres_matnaive_ppm1236',
-	# '2stage',
-    # 'STCNFuseMatting_fullres_matnaive_woPPM',
-	# 'STCNFuseMatting_fullres_matnaive_woCBAM',
     'STCNFuseMatting_fullres_matnaive',
-	# 'STCNFuseMatting_fullres_matnaive_wogru',
-	# 'STCNFuseMatting_fullres_matnaive_temp_seg_allclass',
-	# 'STCNFuseMatting_fullres_matnaive_fullmatte',
-	# 'STCNFuseMatting_fullres_matnaive4',
-	# 'STCNFuseMatting_fullres_matnaive3',
-	# 'STCNFuseMatting_fullres_matnaive_same_memque0.5',
-	# 'STCNFuseMatting_fullres_matnaive_normalce',
-	# 'STCNFuseMatting_fullres_matnaive_normalce_nonetemp',
-    
-	# 'STCNFuseMatting_fullres_matnaive_retry',
-	# 'STCNFuseMatting_fullres_matnaive_same_memque0.1',
-    # '2stage_seg4x'
-	# 'STCNFuseMatting_fullres_matnaive_tempweightl2',
-	# 'STCNFuseMatting_fullres_matnaive_focal_weight',
-	# 'STCNFuseMatting_fullres_matnaive_wo_seg',
-	'STCNFuseMatting_fullres_matnaive_woCBAMPPM',
-	'STCNFuseMatting_fullres_matnaive_woCBAM',
-    
 ]
 
 print(model_list)

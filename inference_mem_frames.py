@@ -25,9 +25,9 @@ from dataset.vm108_dataset import *
 
 from inference_func import *
 from model.model import get_model_by_string
-from STCNVM.model import *
-from STCNVM.module import *
-from STCNVM.inference_model import *
+from FTPVM.model import *
+from FTPVM.module import *
+from FTPVM.inference_model import *
 from inference_model_list import inference_model_list
 
 model_list = [

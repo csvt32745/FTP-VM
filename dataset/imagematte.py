@@ -28,8 +28,14 @@ class ImageMatteDataset(Dataset):
         self.random_memtrimap = random_memtrimap
         self.imagematte_dir = imagematte_dir
         self.imagematte_files = os.listdir(os.path.join(imagematte_dir, 'FG'))
-        self.background_image_dir = background_image_dir
-        self.background_image_files = os.listdir(background_image_dir)
+        if background_image_dir is not None:
+            self.background_image_dir = background_image_dir
+            self.background_image_files = os.listdir(background_image_dir)
+            self.is_bg_img = True
+        else:
+            self.background_image_files = []
+            self.is_bg_img = False
+        
         self.bg_num = bg_num
         self.background_video_dir = background_video_dir
         self.background_video_clips = sorted([
@@ -55,7 +61,7 @@ class ImageMatteDataset(Dataset):
     def __getitem__(self, idx):
         bgr_clips = []
         for i in range(self.bg_num):
-            if random.random() < 0.2:
+            if self.is_bg_img and random.random() < 0.2:
                 bgr_clips.append(self._get_random_image_background())
             else:
                 bgr_clips.append(self._get_random_video_background())

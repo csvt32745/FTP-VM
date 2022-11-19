@@ -16,19 +16,11 @@ import os
 from inference_test import convert_video
 os.environ['CUDA_VISIBLE_DEVICES']=str(args.gpu)
 
-# root = '/home/csvt32745/matte/dataset_mat/footage'
-# input_resize=(1920, 1080)
 root = args.root
-# root = '/home/csvt32745/matte/test_vid'
 input_resize=(1920, 1080)
-# input_resize=(1280, 720)
 
 outroot = args.out_root
-# outroot = '/home/csvt32745/matte/footage_out'
-# model_name = 'STCNFuseMatting_fullres_matnaive_none_temp_seg'
-# model_name = 'STCNFuseMatting_fullres_matnaive_wodata_seg_d646'
 model_name = 'STCNFuseMatting_fullres_matnaive'
-# model_name = 'STCNFuseMatting_fullres_matnaive_same_memque0.5'
 # downsample_ratio=0.5
 os.makedirs(outroot, exist_ok=True)
 def check_and_load_model_dict(model, state_dict: dict):
@@ -67,8 +59,6 @@ for vid in files:
         convert_video(
             model,
             input_source = os.path.join(root, vid),
-            # input_source = '/home/csvt32745/matte/OTVM/tmp_demo/holosum/frames',
-            # input_resize = input_resize,
             memory_img = mem_img,
             memory_mask = mem_mask,
             # downsample_ratio=downsample_ratio,
@@ -87,8 +77,3 @@ for vid in files:
             # num_workers=8,
             target_size=args.target_size,
         )
-
-
-
-#     # print(model)
-#     # converter = Converter(args.variant, args.checkpoint, args.device)

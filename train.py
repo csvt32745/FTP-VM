@@ -125,7 +125,8 @@ def renew_vm108_loader(long_seq=True, nb_frame_only=False):
     size=para['size']
     train_dataset = VideoMatteDataset(
         '../dataset_sc/VideoMatting108_512',
-        '../dataset_sc/BG20k_512/BG-20k/train',
+        # '../dataset_sc/BG20k_512/BG-20k/train',
+        None,
         '../dataset_sc/VideoMatting108_512/BG_done',
         size=size,
         # seq_length=12 if long_seq else 5,
@@ -147,7 +148,8 @@ def renew_d646_loader(long_seq=True, nb_frame_only=False):
     size=para['size']
     train_dataset = ImageMatteDataset(
         '../dataset_sc/Distinctions646_512/Train',
-        '../dataset_sc/BG20k_512/BG-20k/train',
+        None,
+        # '../dataset_sc/BG20k_512/BG-20k/train',
         '../dataset_sc/VideoMatting108_512/BG_done',
         size=size,
         # seq_length=6 if long_seq else 3,

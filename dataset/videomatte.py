@@ -33,8 +33,14 @@ class VideoMatteDataset(Dataset):
         self.bg_num = bg_num
         self.get_bgr_phas = get_bgr_phas
         # self.manager = Manager()
-        self.background_image_dir = background_image_dir
-        self.background_image_files = os.listdir(background_image_dir)
+        
+        if background_image_dir is not None:
+            self.background_image_dir = background_image_dir
+            self.background_image_files = os.listdir(background_image_dir)
+            self.is_bg_img = True
+        else:
+            self.background_image_files = []
+            self.is_bg_img = False
         # self.background_image_files = self.manager.list(self.background_image_files)
 
         self.background_video_dir = background_video_dir
@@ -93,7 +99,7 @@ class VideoMatteDataset(Dataset):
     def __getitem__(self, idx):
         bgr_clips = []
         for i in range(self.bg_num):
-            if random.random() < 0.2:
+            if self.is_bg_img and random.random() < 0.2:
                 bgr_clips.append(self._get_random_image_background())
             else:
                 bgr_clips.append(self._get_random_video_background())

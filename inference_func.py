@@ -5,7 +5,7 @@ import numpy as np
 import torch
 torch.set_grad_enabled(False)
 
-from STCNVM.inference_model import *
+from FTPVM.inference_model import *
 from evalutation.evaluate_lr import Evaluator
 
 

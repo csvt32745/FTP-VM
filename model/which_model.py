@@ -1,5 +1,5 @@
-from STCNVM.rvm.model import RVM
-from STCNVM.model import *
+# from FTPVM.rvm.model import RVM
+from FTPVM.model import *
 
 def get_model_by_string(input_string):
     # which_model=which_module
@@ -49,7 +49,7 @@ def get_model_by_string(input_string):
         '2stage':  SeperateNetwork,
         '2stage_seg4x':  lambda: SeperateNetwork(seg='4x'),
 
-        'RVM': RVM,
+        # 'RVM': RVM,
 
     }[which_model]
 
