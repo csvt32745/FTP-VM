@@ -145,8 +145,6 @@ class FastTrimapPropagationVideoMatting(nn.Module):
 
 
         if is_refine:
-            # self.tmp_out_collab = F.interpolate(out_collab.detach().flatten(0, 1), qimgs.shape[-2:], mode='bilinear', align_corners=False).unflatten(0, qimgs.shape[:2])
-            # out_collab = self.tmp_out_collab
             out_collab = self.refiner(qimgs, qimg_sm, out_collab)
 
         return [out_seg, out_mat, out_collab, [rec_seg, rec_mat], feats]
