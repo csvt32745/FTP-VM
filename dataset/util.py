@@ -3,7 +3,6 @@ cv2.setNumThreads(0)
 import numpy as np
 import torch
 from functools import lru_cache
-from .mask_perturb import perturb_mask
 
 def all_to_onehot(masks, labels):
     Ms = np.zeros((len(labels), masks.shape[0], masks.shape[1], masks.shape[2]), dtype=np.uint8)
@@ -50,13 +49,3 @@ def _get_random_kernel(size, choice):
         return cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (size, size//2))
     elif choice == 4:
         return cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (size//2, size))
-
-def get_perturb_masks(phas):
-    ret = []
-    mae_min = 10
-    mae_max = 40
-    mae_target = np.random.rand()*(mae_max-mae_min) + mae_min
-    for pha in (phas[:, 0].numpy()*255).astype(np.uint8): # N, H, W
-        pha = perturb_mask(pha, mae_target)
-        ret.append(torch.from_numpy(pha))
-    return torch.stack(ret).unsqueeze(1)/255.

@@ -20,7 +20,7 @@ root = args.root
 input_resize=(1920, 1080)
 
 outroot = args.out_root
-model_name = 'STCNFuseMatting_fullres_matnaive'
+model_name = 'STCNFuseMatting_test'
 # downsample_ratio=0.5
 os.makedirs(outroot, exist_ok=True)
 def check_and_load_model_dict(model, state_dict: dict):
@@ -44,9 +44,9 @@ for vid in files:
         # print(name, tri)
         suffix = tri.split('trimap')[-1].split('.')[0]
         output_name = name+"_"+suffix
-        if os.path.isfile(os.path.join(outroot, output_name+"_com.mp4")):
-            print('Already finished, skip: ', name)
-            continue
+        # if os.path.isfile(os.path.join(outroot, output_name+"_com.mp4")):
+        #     print('Already finished, skip: ', name)
+        #     continue
         
         mem_img = os.path.join(root, name+"_thumbnail.png")
         mem_mask = os.path.join(root, tri)

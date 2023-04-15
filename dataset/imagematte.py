@@ -10,7 +10,7 @@ from PIL import Image
 
 
 from .augmentation import MotionAugmentation
-from .util import get_dilated_trimaps, get_perturb_masks
+from .util import get_dilated_trimaps
 
 class ImageMatteDataset(Dataset):
     def __init__(self,

@@ -6,10 +6,9 @@ from FTPVM.inference_model import *
 
 
 inference_model_list = [
-    ('STCNFuseMatting_fullres_matnaive', 'STCNFuseMatting_fullres_matnaive', InferenceCoreRecurrentGFM, 
+    ('FTPVM', 'FTPVM', InferenceCoreRecurrentMemory, 
 	'./saves/Aug11_15.46.26_STCNFuseMatting_fullres_matnaive/Aug11_15.46.26_STCNFuseMatting_fullres_matnaive_120000.pth'),
-]   
-
+]
 
 
 if __name__ == '__main__':

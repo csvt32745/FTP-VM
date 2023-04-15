@@ -19,6 +19,7 @@ from torchinfo import summary
 import einops
 
 from model.which_model import get_model_by_string
+from TCVOM_TGM.model import FullModel
 # from model.losses import LossComputer, iou_hooks_mo, iou_hooks_so
 from model.losses import MatLossComputer, SegLossComputer
 from util.log_integrator import Integrator
@@ -29,9 +30,10 @@ from warmup_scheduler import GradualWarmupScheduler
 class PropagationModel:
     def __init__(self, para, logger=None, save_path=None, local_rank=0, world_size=1):
         self.para = para
-        print("Using model: ", para['which_model'])
+        print("Train TCVOM-tgm")
         # "which_model=which_module"
-        self.PNet = get_model_by_string(para['which_model'])().cuda()
+        # self.PNet = get_model_by_string(para['which_model'])().cuda()
+        self.PNet = FullModel(celoss_type=para['celoss_type']).cuda()
         
         print("Net Parameters: ", summary(self.PNet, verbose=0).total_params)
         self.logger = logger
@@ -39,12 +41,6 @@ class PropagationModel:
         os.makedirs(os.path.dirname(self.save_path), exist_ok=True)
         self.para.save(os.path.join(os.path.dirname(self.save_path), 'config.json'))
         
-
-        # TODO:
-        self.full_trimaps = '2stage' in para['which_model']
-        if self.full_trimaps:
-            print("2 Stage model: given full trimaps.")
-
         self.compose_multiobj = para['compose_multiobj']
         self.split_trimap = para['split_trimap']
         self.random_memtrimap = para['random_memtrimap']
@@ -70,7 +66,7 @@ class PropagationModel:
         # Logging info
         self.report_interval = 100
         self.save_im_interval = 800
-        self.save_model_interval = 20000
+        self.save_model_interval = 60000
         if para['debug']:
             self.report_interval = self.save_im_interval = 1
         
@@ -111,56 +107,13 @@ class PropagationModel:
         trimap = data['trimap']
         # gt = data['gt']
         rgb = data['rgb']
-
-        # B, T, C, H, W
-        T = rgb.size(1)
-        # rgb_m, rgb_q = rgb.split([1, T-1], dim=1)
-        # gt_m, gt_q = gt.split([1, T-1], dim=1)
+        loss, pred = self.PNet(rgb, trimap)
+        data['rgb_query'] = rgb
         
-        # TODO:
-        if self.full_trimaps:
-            mem_tri = trimap
-        else:
-            mem_tri = data['mem_trimap'] if self.random_memtrimap else trimap[:, [0]]
+        out = {}
+        out['mask'] = pred
 
-        if self.split_trimap: mem_tri = self.trimap_to_3chmask(mem_tri)
-
-        if self.memory_alpha:
-            if it < self.memory_out_alpha_start or random.random() < 0.5:
-                mem_tri = mem_tri.repeat_interleave(2, dim=2)
-            else:
-                mem_rgb = rgb[:, [0]]
-                ret = self.PNet(mem_rgb, mem_rgb, mem_tri.repeat_interleave(2, dim=2))
-                alpha_out = ret[2] if len(ret) == 5 else ret[0] # collab or not
-                mem_tri = torch.cat([mem_tri, alpha_out], dim=2)
-        
-        if random.random() < self.prob_same_mem_que:
-            rgbq = rgb
-            data['trimap_query'] = trimap
-        else:
-            rgbq = rgb[:, 1:]
-            data['trimap_query'] = trimap[:, 1:]
-        ret = self.PNet(rgbq, rgb[:, [0]], mem_tri, segmentation_pass=True)
-        
-        # print(rgbq.size(1))
-
-        logits = ret[0]
-        out = {
-            'logits': logits
-        }
-
-        if len(ret) >= 3:
-            out['extra_outs'] = ret[-1]
-
-        data['rgb_query'] = rgbq
-
-        if logits.size(2) == 3:
-            # GFM            
-            out['mask'] = self.seg_to_trimap(logits)
-        else:
-            out['mask'] = torch.sigmoid(logits)
-
-        return data, out
+        return data, out, loss
 
     @staticmethod
     def compose_multiobj_data(fg, bg, gt):
@@ -185,54 +138,13 @@ class PropagationModel:
             rgb = data['rgb'] = fg*gt + bg*(1-gt)
         # B, T, C, H, W
         
-        # TODO:
-        if self.full_trimaps:
-            mem_tri = data['trimap']
-        else:
-            mem_tri = data['mem_trimap'] if self.random_memtrimap else data['trimap'][:, [0]]
-
-        if self.split_trimap: mem_tri = self.trimap_to_3chmask(mem_tri)
+        loss, pred = self.PNet(rgb, trimap)
+        data['rgb_query'] = rgb
         
-        if self.memory_alpha:
-            if it < self.memory_out_alpha_start or random.random() < 0.5:
-                mem_tri = mem_tri.repeat_interleave(2, dim=2)
-            else:
-                mem_rgb = rgb[:, [0]]
-                ret = self.PNet(mem_rgb, mem_rgb, mem_tri.repeat_interleave(2, dim=2))
-                alpha_out = ret[2] if len(ret) == 5 else ret[0] # collab or not
-                mem_tri = torch.cat([mem_tri, alpha_out], dim=2)
-
-        if rgb.size(1) <= 4 or random.random() < self.prob_same_mem_que:
-            rgbq = rgb
-            data['trimap_query'] = trimap
-            data['gt_query'] = gt
-        else:
-            rgbq = rgb[:, 1:]
-            data['gt_query'] = gt[:, 1:]
-            data['rgb_query'] = rgb
-            data['trimap_query'] = trimap[:, 1:]
-        
-        data['rgb_query'] = rgbq
-        # print(rgbq.size(1))
-
-        ret = self.PNet(rgbq, rgb[:, [0]], mem_tri, segmentation_pass=False)
         out = {}
-        
-        if (isinstance(ret[-1], list) and (ret[-1][0].size(2) == 1)) \
-            or (isinstance(ret[-1], torch.Tensor) and (ret[-1].size(2) in [3, 4])):
-            out['extra_outs'] = ret[-1]
-        
-        if len(ret) == 5:
-            # GFM [glance, focus, collab, rec, extra]
-            data['glance'] = ret[0]
-            out['glance_out'] = self.seg_to_trimap(ret[0])
-            data['focus'] = ret[1]
-            data['collab'] = out['mask'] = ret[2]
-        else:
-            out['mask'] = ret[0]
+        out['mask'] = pred
 
-        # data['fg_query'] = fg
-        return data, out
+        return data, out, loss
 
     @staticmethod
     def cur_to_prev(cur):
@@ -248,12 +160,15 @@ class PropagationModel:
             if type(v) != list and type(v) != dict and type(v) != int:
                 data[k] = v.cuda(non_blocking=True)
 
-        data, out = self.seg_pass(data, it) if segmentation_pass else self.mat_pass(data, it)
+        data, out, loss = self.seg_pass(data, it) if segmentation_pass else self.mat_pass(data, it)
+        losses = {}
+        losses['total_loss'] = losses['seg_bce'] = loss
+        # print(loss.shape)
 
         if self._do_log or self._is_train:
-            data, losses = (self.seg_loss_computer if segmentation_pass else self.loss_computer)\
-                .compute({**data, **out}, it)
-
+            # data, losses = (self.seg_loss_computer if segmentation_pass else self.loss_computer)\
+            #     .compute({**data, **out}, it)
+            data.update(out)
             # Logging
             if self._do_log:
                 self.integrator.add_dict(losses)

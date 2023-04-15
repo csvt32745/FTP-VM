@@ -1,14 +1,11 @@
-from functools import lru_cache
-from typing import Optional
 import torch
-from torch import Tensor
 import math
 from torch import nn
 from torch.nn import functional as F
-from torchvision.ops.deform_conv import DeformConv2d
-import kornia as K
 from einops import rearrange
-from .basic_block import ResBlock
+from torch import Tensor
+from typing import Optional, List
+from .basic_block import ResBlock, Projection, GatedConv2d, AvgPool
 from . import cbam
 
 class FeatureFusion(nn.Module):
@@ -25,122 +22,6 @@ class FeatureFusion(nn.Module):
     def forward_single_frame(self, x):
         x = self.block(x)
         return x + self.attention(x)
-    
-    def forward_time_series(self, x):
-        B, T = x.shape[:2]
-        x = self.forward_single_frame(x.flatten(0, 1)).unflatten(0, (B, T))
-        return x
-    
-    def forward(self, x):
-        if x.ndim == 5:
-            return self.forward_time_series(x)
-        else:
-            return self.forward_single_frame(x)
-
-FeatureFusion3 = FeatureFusion
-
-class ConvSelfAttention(nn.Module):
-    def __init__(self, 
-        dim=32, attn_dim=32, head=2, 
-        qkv_bias=False, patch_size=16, 
-        drop_p=0., same_qkconv=False):
-        super().__init__()
-        # (b*t, 256, H/4, W/4)
-        
-        def check_size(patch_sz):
-            patch_sz = patch_sz
-            length = 0
-            while patch_sz > 1:
-                assert (patch_sz&1) == 0, 'patch_size is required to be 2^N'
-                patch_sz = patch_sz >> 1
-                length += 1
-            return length
-        length = check_size(int(patch_size))
-        
-        def get_convstem(ch_in, ch_out, length):
-            chs = [ch_in] + [ch_out]*length
-            # net = [Deform_Conv_V1(ch_in, ch_in, 3, 1, 1)]
-            net = []
-            for i in range(length):
-                net += [
-                    nn.Conv2d(chs[i], chs[i+1], 3, 1, 1),
-                    nn.MaxPool2d(2, 2),
-                    nn.ReLU(True),
-                ]
-            net.append(nn.Conv2d(chs[-1], ch_out, 1))
-            return nn.Sequential(*net) # abort the last act
-        
-        self.kernel, self.stride, self.padding = (patch_size, patch_size, 0)
-        self.conv_q = get_convstem(dim, attn_dim*head, length)
-        self.conv_k = self.conv_q if same_qkconv else get_convstem(dim, attn_dim*head, length)
-        # self.conv_k = self.conv_q
-        # (b*t, qkv, H', W')
-        self.is_proj_v = head > 1
-        self.conv_v = nn.Conv2d(dim, dim*head, 1, bias=qkv_bias) if self.is_proj_v else nn.Identity()
-        self.head = head
-        self.ch_qkv = attn_dim
-        self.merge_v = nn.Conv2d(dim*self.head, dim, 1) if self.is_proj_v else nn.Identity()
-        self.qk_scale = dim ** -0.5
-        self.patch_size = patch_size
-        self.unfold = nn.Unfold(kernel_size=self.kernel, stride=self.stride, padding=self.padding)
-        # print(self.unfold)
-        self.drop_attn = nn.Dropout(p=drop_p)
-        # self.drop_proj = nn.Dropout(p=drop_p)
-
-    
-    @staticmethod
-    @lru_cache(maxsize=None)
-    def get_diag_id(length: int):
-        return list(range(length))
-
-    def forward(self, x_query, x_key=None, x_value=None):
-        
-        b, t, c, h, w = x_query.shape
-        if x_key is None:
-            x_key = x_query
-        # t_kv = x_kv.size(1)
-
-        x_query = self.drop_attn(x_query.flatten(0, 1))
-        x_key = self.drop_attn(x_key.flatten(0, 1))
-        x_value = x_key if x_value is None else x_value.flatten(0, 1)
-        
-        v = self.conv_v(x_value) # ((b t), ...)
-        v = self.unfold(v) # ((b t) P*P*c*m h'*w')
-        v = rearrange(v, '(b t) (m c) w -> b m (t w) c', b=b, m=self.head)
-
-        q = rearrange(self.conv_q(x_query), "(b t) (m c) h w -> b m c (t h w)", b=b, m=self.head, c=self.ch_qkv)
-        k = rearrange(self.conv_k(x_key), "(b t) (m c) h w -> b m c (t h w)", b=b, m=self.head, c=self.ch_qkv)
-
-        A = q.transpose(-2, -1) @ k
-        # exclude self
-        # i = self.get_diag_id(A.size(-1)) 
-        # A[..., i, i] = -torch.inf
-        A = A.softmax(dim=-1) # b m (t hq wq) (t hk wk)
-
-        out = A @ v  # b m (t hq wq) c
-        out = rearrange(out, 'b m (t w) c -> (b t m) c w', t=t)
-        out = F.fold(out, (h, w), kernel_size=self.kernel, stride=self.stride, padding=self.padding)
-        out = rearrange(out, '(b t m) c h w -> (b t) (c m) h w', b=b, m=self.head)
-        out = self.merge_v(out)
-        out = rearrange(out, '(b t) c h w -> b t c h w', b=b)
-        return out, A
-
-class LRASPP(nn.Module):
-    def __init__(self, in_channels, out_channels):
-        super().__init__()
-        self.aspp1 = nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, 1, bias=False),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(True)
-        )
-        self.aspp2 = nn.Sequential(
-            nn.AdaptiveAvgPool2d(1),
-            nn.Conv2d(in_channels, out_channels, 1, bias=False),
-            nn.Sigmoid()
-        )
-        
-    def forward_single_frame(self, x):
-        return self.aspp1(x) * self.aspp2(x)
     
     def forward_time_series(self, x):
         B, T = x.shape[:2]
@@ -222,3 +103,59 @@ class MemoryReader(nn.Module):
         val = torch.bmm(mv, affinity) # b, ch_val, nq
         val = rearrange(val, 'b c (t h w) -> b t c h w', h=H, w=W)
         return val
+
+class TrimapGatedFusion(nn.Module):
+    def __init__(self, ch_feats, ch_mask=1):
+        super().__init__()
+        assert len(ch_feats) == 4
+        self.gated_convs = nn.ModuleList([
+            nn.Sequential(
+                GatedConv2d(ch_feats[i]+ch_mask+(ch_feats[i-1] if i > 0 else 0), ch_feats[i], 3, 1, 1),
+                nn.GroupNorm(4, ch_feats[i]),
+                nn.Conv2d(ch_feats[i], ch_feats[i], 3, 1, 1),
+                nn.LeakyReLU(0.2),
+                nn.GroupNorm(4, ch_feats[i]),
+                nn.AvgPool2d((2, 2)) if i < 3 else nn.Identity(),
+            )
+            for i in range(4)
+        ])
+
+        self.avgpool = AvgPool(num=4)
+        
+    def forward(self, img: Tensor, mask: Tensor, feats: List[Tensor]):
+        masks_sm = self.avgpool(mask)
+        f = feats[0]
+        bt = f.shape[:2]
+        f = self.gated_convs[0](torch.cat([f, masks_sm[0]], dim=2).flatten(0, 1))
+        for i in range(1, 4):
+            f = torch.cat([f, feats[i].flatten(0, 1), masks_sm[i].flatten(0, 1)],  dim=1)
+            f = self.gated_convs[i](f)
+        # f = f.view(*bt, f.shape[1:])
+        f = f.unflatten(0, bt)
+        return f.transpose(1, 2) # b, t, c, h, w -> b, c, t, h, w
+
+class BottleneckFusion(nn.Module):
+    def __init__(self, ch_in, ch_key, ch_value, ch_out, affinity='dotproduct'):
+        super().__init__()
+        self.project_key = Projection(ch_in, ch_key)
+        self.reader = MemoryReader(affinity=affinity)
+
+        self.fuse = FeatureFusion(ch_in+ch_value, ch_out)
+        self.bottleneck = PSP(ch_out, ch_out//4, ch_out)
+        self.ch_out = ch_out
+        
+    def forward(self, f16_q, f16_m, value_m):
+        f16_m = self.read_value(f16_q, f16_m, value_m)
+        out = self.fuse(torch.cat([f16_q, f16_m], dim=2))
+        out = self.bottleneck(out)
+        return out
+    
+    def read_value(self, f16_q, f16_m, value_m):
+        qk = self.encode_key(f16_q)
+        mk = self.encode_key(f16_m)
+        A = self.reader.get_affinity(mk, qk)
+        return self.reader.readout(A, value_m) # value_m.shape == (b, c, t, h, w)
+
+    def encode_key(self, feat16):
+        # b, t, c, h, w -> b, ch_key, t, h, w
+        return self.project_key(feat16).transpose(1, 2)

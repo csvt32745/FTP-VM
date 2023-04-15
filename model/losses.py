@@ -143,12 +143,16 @@ class SegLossComputer:
         self.para = para
         self.bce = nn.BCEWithLogitsLoss()
         self.bsce = BootstrappedCE()
-        assert (celoss_type:=para['celoss_type']) in ['focal', 'normal', 'normal_weight', 'focal_weight']
+        # assert (celoss_type:=para['celoss_type']) in ['focal', 'normal', 'normal_weight', 'focal_weight']
+        celoss_type=para['celoss_type']
         self.ce = {
             'focal': FocalLoss,
             'normal': nn.CrossEntropyLoss,
             'normal_weight': lambda: nn.CrossEntropyLoss(weight=torch.FloatTensor([1, 3, 1])).cuda(),
             'focal_weight': lambda: FocalLoss(alpha=torch.FloatTensor([1, 3, 1])).cuda(),
+            'focal_gamma1': lambda: FocalLoss(gamma=1).cuda(),
+            'focal_gamma5': lambda: FocalLoss(gamma=5).cuda(),
+            'focal_gamma0.5': lambda: FocalLoss(gamma=0.5).cuda(),
         }[celoss_type]()
         self.avg2d = nn.AvgPool3d((1, 2, 2))
         self.avg2d_bg = nn.AvgPool3d((1, 4, 4))
@@ -218,12 +222,16 @@ class MatLossComputer:
         super().__init__()
         self.para = para
         self.lapla_loss = LapLoss(max_levels=5).cuda()
-        assert (celoss_type:=para['celoss_type']) in ['focal', 'normal', 'normal_weight', 'focal_weight']
+        # assert (celoss_type:=para['celoss_type']) in ['focal', 'normal', 'normal_weight', 'focal_weight']
+        celoss_type=para['celoss_type']
         self.ce = {
             'focal': FocalLoss,
             'normal': nn.CrossEntropyLoss,
             'normal_weight': lambda: nn.CrossEntropyLoss(weight=torch.FloatTensor([1, 3, 1])).cuda(),
             'focal_weight': lambda: FocalLoss(alpha=torch.FloatTensor([1, 3, 1])).cuda(),
+            'focal_gamma1': lambda: FocalLoss(gamma=1).cuda(),
+            'focal_gamma5': lambda: FocalLoss(gamma=5).cuda(),
+            'focal_gamma0.5': lambda: FocalLoss(gamma=0.5).cuda(),
         }[celoss_type]()
         self.bsce = BootstrappedCE()
         self.spatial_grad = K.filters.SpatialGradient()
@@ -233,6 +241,7 @@ class MatLossComputer:
         self.lambda_tvloss = para['lambda_segtv']
         self.start_tvloss = para['start_segtv']
         self.full_matte = para['full_matte']
+        self.lambda_tcloss = para['lambda_tc']
 
     @staticmethod
     def unpack_data_with_bgnum(data: dict, key):
@@ -331,7 +340,7 @@ class MatLossComputer:
         true_pha_ = true_pha.flatten(0, 1)
         loss['pha_laplacian'] = self.lapla_loss(pred_pha_, true_pha_)
         loss['pha_coherence'] = F.mse_loss(pred_pha[:, 1:] - pred_pha[:, :-1],
-                                           true_pha[:, 1:] - true_pha[:, :-1]) * 5
+                                           true_pha[:, 1:] - true_pha[:, :-1]) * self.lambda_tcloss
 
         # pred_grad = self.spatial_grad(pred_pha)
         # true_grad = self.spatial_grad(true_pha)
@@ -498,6 +507,11 @@ class TotalVariationLoss(nn.Module):
             'temp_seg_allclass': lambda p, t: self.seg_inconsistency_temp_all_class(p, t, self.mask_weighted_avg),
             'temp_seg_allclass_mean': lambda p, t: self.seg_inconsistency_temp_all_class(p, t, self.mean_weighted_avg),
             'temp_seg_allclass_weight': lambda p, t: self.seg_inconsistency_temp_all_class_with_weight(p, t),
+            'temp_seg_allclass_weight_0.33': lambda p, t: self.seg_inconsistency_temp_all_class_with_weight(p, t
+                , trueclass_lambda=0.33, otherclass_lambda=0.33),
+            'temp_seg_allclass_weight_0.8': lambda p, t: self.seg_inconsistency_temp_all_class_with_weight(p, t
+                , trueclass_lambda=0.8, otherclass_lambda=0.1),
+            
             'temp_seg_allclass_weight_l2': lambda p, t: self.seg_inconsistency_temp_all_class_with_weight_l2(p, t),
             
             '3d_seg': lambda p, t: self.seg_inconsistency_3d(p, t),

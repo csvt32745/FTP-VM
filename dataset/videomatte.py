@@ -8,10 +8,7 @@ import cv2
 cv2.setNumThreads(0)
 import numpy as np
 from .augmentation import MotionAugmentation
-from .util import get_dilated_trimaps, get_perturb_masks
-
-# import pyarrow as pa
-from multiprocessing import Manager
+from .util import get_dilated_trimaps
 
 
 class VideoMatteDataset(Dataset):

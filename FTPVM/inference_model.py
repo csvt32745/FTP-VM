@@ -209,17 +209,8 @@ class InferenceCore:
         masks = self.unpad_imgs(self.masks[:, 0]).numpy() # T, H, W
         for i in range(self.current_out_t):
             media.write_image(os.path.join(pha_path, f'{i:04d}.png'), masks[i])
-            
-        return
-        # TODO: save FGs
-        # if self.fgs is not None:
-        fgr_path = os.path.join(path, name, 'fgr')
-        os.makedirs(fgr_path, exist_ok=True)
-        fgrs = self.images if self.fgs is None else self.fgs
-        fgrs = self.unpad_imgs(fgrs.permute(0, 2, 3, 1)).numpy() # T, H, W, 3
-        for i in trange(fgrs.shape[0]):
-            media.write_image(os.path.join(fgr_path, f'{i:04d}.png'), fgrs[i])
 
+    
     def save_gt(self, path):#, is_fix_fgr=False):
         name = self.name.replace('/', '_')
         # if is_fix_fgr:
@@ -227,7 +218,6 @@ class InferenceCore:
         print(f"Save gt: {path}, {name} ")
         # save masks
 
-        
         tri_path = os.path.join(path, name, 'trimap')
         if os.path.isdir(tri_path):
             return
@@ -263,103 +253,9 @@ class InferenceCore:
         del self.masks
         del self.trimaps
 
-class InferenceCoreSTCN(InferenceCore):
-    def __init__(self, 
-        model, 
-        dataset: VM108ValidationDataset, loader_iter, 
-        num_objects=1, top_k=40, mem_every=5, include_last=False,
-        pad=16, last_data=None
-    ):
-        super().__init__(model, dataset, loader_iter, pad, last_data)
-    
-        self.mem_every = mem_every
-        self.include_last = include_last
-
-        self.k = num_objects
-        self.mem_bank = MemoryBank(k=self.k, top_k=top_k)
-
-        self.cur_idx = 0
-
-    def encode_key(self, rgb):
-        k16, qv16, qf16, qf8, qf4 = self.model.encode_key(rgb) # 1 T C H W
-        return rgb, qf8, qf4, k16, qv16, qf16
-
-    def decode_with_query(self, rgb, qf8, qf4, k16, qv16, qf16):
-        # feed the result into decoder
-        return self.model.decode_with_query(self.mem_bank, rgb, qf8, qf4, k16, qv16) # 1 T 1 H W
-
-    def encode_value(self, rgb, qf8, qf4, k16, qv16, qf16, mask, idx=-1):
-        if idx > 0:
-            return k16[:, :, [idx]], self.model.encode_value(rgb[:, [idx]], rgb[:, [idx]], rgb[:, [idx]])
-        return k16, self.model.encode_value(rgb, qf16, mask)
-
-    def do_pass(self, key_k, key_v, idx, end_idx):
-        self.mem_bank.add_memory(key_k, key_v)
-        closest_ti = end_idx
-
-        # Note that we never reach closest_ti, just the frame before it
-        # this_range = self.get_frame_stamps(idx, closest_ti, 1)
-        this_range = self.get_frame_stamps(idx, closest_ti, self.mem_every)
-        final_idx = closest_ti - 1
-
-        for i in tqdm(range(len(this_range)-1)):
-            start, end = this_range[i:i+2]
-            while self.images.size(0) < end:
-                self.add_images_from_loader()
-            rgb = self.images[start:end].unsqueeze(0).cuda() # 1 T 3 H W
-            
-            query_feats = self.encode_key(rgb)
-            out_mask = self.decode_with_query(*query_feats)
-
-            self.masks = self.tensor_cat(self.masks, out_mask[0].cpu(), self.current_out_t)
-            self.current_out_t = end
-            if start != final_idx: # and start % self.mem_every == 0:
-                prev_key, prev_value = self.encode_value(*query_feats, out_mask, idx=0)
-                self.mem_bank.add_memory(prev_key, prev_value)
-                self.mem_bank.memory_pruning()
-
-        return closest_ti
-    
-    def propagate(self, frame_idx=0, end_idx=-1, mask=None):
-        # propagate the frame with input mask
-        while self.images.size(0) < frame_idx:
-            self.add_images_from_loader()
-        
-        # take GT if input mask is not given
-        mask = self.pad_imgs(mask) if mask is not None else self.gts[[frame_idx]]
-        self.masks = self.tensor_cat([self.masks, mask], self.current_out_t)
-
-        mask = mask.unsqueeze(0).cuda() # 1, 1, 1, H, W
-        # KV pair for the interacting frame
-        rgb = self.images[frame_idx].unsqueeze(0).unsqueeze(0).cuda() # 1, 1, C, H, W
-        feats = self.encode_key(rgb)
-        key_k, key_v = self.encode_value(*feats, mask.cuda())
-
-        # Propagate
-        self.do_pass(key_k, key_v, frame_idx+1, (end_idx if end_idx > 0 else self.total_frames))
-
-class InferenceCoreMemoryRecurrent(InferenceCoreSTCN):
-    def __init__(self, 
-        model, 
-        dataset: VM108ValidationDataset, loader_iter, 
-        num_objects=1, top_k=40, mem_every=10, include_last=False, 
-        pad=16, last_data=None
-    ):
-        super().__init__(model, dataset, loader_iter, num_objects, top_k, mem_every, include_last, pad, last_data)
-        self.model = model
-        self.gru_mems = [None] * 4
-    
-    def decode_with_query(self, rgb, qf8, qf4, k16, qv16, qf16):
-        # feed the result into decoder
-        out, self.gru_mems = self.model.decode_with_query(self.mem_bank, self.gru_mems, rgb, qf8, qf4, k16, qv16)
-        return out
-
-    def propagate(self, frame_idx=0, end_idx=-1, mask=None):
-        return super().propagate(frame_idx, end_idx, mask)
-
 class InferenceCoreRecurrent(InferenceCore):
     def __init__(self, 
-        model: STCNFuseMatting, 
+        model: FastTrimapPropagationVideoMatting, 
         dataset: VM108ValidationDataset, 
         loader_iter, 
         pad=16, 
@@ -503,8 +399,8 @@ class InferenceCoreRecurrent(InferenceCore):
     def add_memory_bank(self, idx):
         raise NotImplementedError
 
-class InferenceCoreRecurrentGFM(InferenceCoreRecurrent):
-    def __init__(self, model: STCNFuseMatting, dataset: VM108ValidationDataset, loader_iter, pad=16, last_data=None, memory_gt=False, memory_iter=False, memory_bg=False, downsample_ratio=1., memory_save_iter=-1, memory_bank_size=5, replace_by_given_tri=False,):
+class InferenceCoreRecurrentMemory(InferenceCoreRecurrent):
+    def __init__(self, model: FastTrimapPropagationVideoMatting, dataset: VM108ValidationDataset, loader_iter, pad=16, last_data=None, memory_gt=False, memory_iter=False, memory_bg=False, downsample_ratio=1., memory_save_iter=-1, memory_bank_size=5, replace_by_given_tri=False,):
         super().__init__(model, dataset, loader_iter, pad, last_data, memory_gt, memory_iter, memory_bg=memory_bg, downsample_ratio=downsample_ratio, memory_save_iter=memory_save_iter, memory_bank_size=memory_bank_size, replace_by_given_tri=replace_by_given_tri)
 
         self.glance_outs = None
@@ -620,53 +516,3 @@ class InferenceCoreRecurrentGFM(InferenceCoreRecurrent):
         
         os.makedirs(path, exist_ok=True)
         media.write_video(os.path.join(path, f'{name}.mp4'), vid.numpy(), fps=15)
-
-class InferenceCoreDoubleRecurrentGFM(InferenceCoreRecurrentGFM):
-    def __init__(self, model, dataset: VM108ValidationDataset, loader_iter, pad=16, last_data=None, memory_gt=False, memory_iter=False, memory_bg=False,):
-        super().__init__(model, dataset, loader_iter, pad, last_data, memory_gt, memory_iter, memory_bg=False,)
-        self.gru_mems = [[None]*4]*2
-
-class InferenceCoreRecurrentGFMBG(InferenceCoreRecurrentGFM):
-    def __init__(self, model, dataset: VM108ValidationDataset, loader_iter, pad=16, last_data=None, memory_gt=False, memory_iter=False, memory_bg=False,):
-        super().__init__(model, dataset, loader_iter, pad, last_data, memory_gt, memory_iter, memory_bg=False,)
-        self.gru_mems = [None]*5
-
-class InferenceCoreRecurrentBG(InferenceCoreRecurrent):
-    def __init__(self, model, dataset: VM108ValidationDataset, loader_iter, pad=16, last_data=None, memory_gt=False, memory_iter=False, memory_bg=False,):
-        super().__init__(model, dataset, loader_iter, pad, last_data, memory_gt, memory_iter, memory_bg=False,)
-        self.gru_mems = [None]*4
-
-class InferenceCoreRecurrent3chTrimap(InferenceCoreRecurrentGFM):
-    def __init__(self, model, dataset: VM108ValidationDataset, loader_iter, pad=16, last_data=None, memory_gt=False, memory_iter=False, memory_bg=False, downsample_ratio=1):
-        super().__init__(model, dataset, loader_iter, pad, last_data, memory_gt, memory_iter, memory_bg, downsample_ratio)
-
-    def get_memory_mask(self, idx):
-        trimap = super().get_memory_mask(idx)
-        # print(trimap.shape, self.trimap_to_3chmask(trimap).shape)
-        return self.trimap_to_3chmask(trimap)
-
-    @staticmethod
-    def trimap_to_3chmask(trimap):
-        fg = trimap > (1-1e-3)
-        bg = trimap < 1e-3
-        mask = torch.cat([fg, ~(fg|bg), bg], dim=-3).float()
-        return mask
-
-class InferenceCoreRecurrentMemAlpha(InferenceCoreRecurrentGFM):
-    def __init__(self, model: STCNFuseMatting, dataset: VM108ValidationDataset, loader_iter, pad=16, last_data=None, memory_gt=False, memory_iter=False, memory_bg=False, downsample_ratio=1., memory_save_iter=-1, memory_bank_size=5):
-        super().__init__(model, dataset, loader_iter, pad, last_data, memory_gt, memory_iter, memory_bg=memory_bg, downsample_ratio=downsample_ratio, memory_save_iter=memory_save_iter, memory_bank_size=memory_bank_size)
-
-    def get_memory_mask(self, idx):
-        trimap = super().get_memory_mask(idx).unsqueeze(0).unsqueeze(0).cuda()
-        img = self.get_memory_img(idx).unsqueeze(0).unsqueeze(0).cuda()
-        alpha = self.model.forward(img, img, trimap.repeat_interleave(2, dim=2), *self.gru_mems, downsample_ratio=self.downsample_ratio)[2]
-        # print(trimap.shape, self.trimap_to_3chmask(trimap).shape)
-        return torch.cat([trimap, alpha], dim=2)[0, 0].cpu()
-
-    def add_memory_bank(self, idx):
-        # print("Add mem: ", idx)
-        rgb = self.images[idx].unsqueeze(0).unsqueeze(0).cuda()
-        # tri = self.trimaps[idx].unsqueeze(0).unsqueeze(0).cuda()
-        tri = self.glance_outs[idx].unsqueeze(0).unsqueeze(0).cuda()
-        pha = self.masks[idx].unsqueeze(0).unsqueeze(0).cuda()
-        self.memory_bank.add_memory(*self.model.encode_imgs_to_value(rgb, torch.cat([tri, pha], dim=2)), self.downsample_ratio)

@@ -8,11 +8,6 @@ import numpy as np
 import json
 import itertools
 import random
-
-from dataset.range_transform import im_normalization, im_mean
-# from dataset.mask_perturb import perturb_mask
-# from dataset.gen_scribble import get_scribble
-from dataset.reseed import reseed
 from dataset.util import get_dilated_trimaps
 
 class VM108ValidationDataset(Dataset):
@@ -324,7 +319,10 @@ class VM240KValidationDataset(Dataset):
         return self.num_frames_of_video[video]
 
 class ClipShuffleValidationDataset(VM240KValidationDataset):
-    """ Shuffle the split clips in the video with given clip-length """
+    """
+    Shuffle the split clips in the video with given clip-length
+    Simulate the scene change
+    """
     def __init__(self, 
             root='../dataset_mat/vm108_1024',
             remap_path = '',

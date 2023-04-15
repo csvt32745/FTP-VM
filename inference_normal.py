@@ -17,7 +17,6 @@ import os
 os.environ['CUDA_VISIBLE_DEVICES']=str(args.gpu)
 
 from torch.utils.data import DataLoader
-from fastai.data.load import DataLoader as FAIDataLoader
 
 from dataset.imagematte import *
 from dataset.videomatte import *
@@ -25,14 +24,13 @@ from dataset.augmentation import *
 from dataset.vm108_dataset import *
 
 from inference_func import *
-from model.model import get_model_by_string
+from model.which_model import get_model_by_string
 from FTPVM.model import *
-from FTPVM.module import *
 from FTPVM.inference_model import *
 from inference_model_list import inference_model_list
 
 model_list = [
-    'STCNFuseMatting_fullres_matnaive',
+    ('FTPVM', 'FTPVM'),
 ]
 
 print(model_list)
@@ -85,7 +83,7 @@ if flg:
 # =========================
 # vm240k dataset
 
-flg = True
+flg = False
 if args.size == '1024':
     size = [576, 1024] # H, W
     dataset = VM240KValidationDataset(
@@ -114,7 +112,7 @@ if flg:
 # realhuman dataset
 
 for dataset_name, realhuman in [
-    ('realhuman_allframe', RealhumanDataset_AllFrames),
+    # ('realhuman_allframe', RealhumanDataset_AllFrames),
     # ('realhuman', RealhumanDataset),
 ]:
     flg = True

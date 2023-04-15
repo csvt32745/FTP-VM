@@ -13,7 +13,7 @@ from collections import defaultdict
 import random
 from tqdm import tqdm
 
-from .util import get_dilated_trimaps, get_perturb_masks
+from .util import get_dilated_trimaps
 
 class YouTubeVISDataset(Dataset):
     def __init__(self, videodir, annfile, size, seq_length, seq_sampler, transform=None, debug_data=None, random_memtrimap=False, none_trimap=False):
