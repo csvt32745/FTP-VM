@@ -1,4 +1,3 @@
-from pathy import dataclass
 import torch
 from torch import Tensor
 from torch import nn
@@ -65,6 +64,16 @@ class FastTrimapPropagationVideoMatting(nn.Module):
         segmentation_pass: bool = False,
         replace_given_seg: bool = False,
     ):
+        """
+        `qimgs`: query frames (b, t, 3, h, w),\n
+        `mimgs`: memory frames (b, 1, 3, h, w),\n
+        `masks`: memory masks (b, 1, 1, h, w),\n
+        `rec_seg`: RNN memory of trimap decoder, which is the output of decoder, default = `None` ,\n
+        `rec_mat`: RNN memory of matting decoder, which is the output of decoder, default = `None`,\n
+        `downsample_ratio`: downsample to process high-res frames, and recovered by Fast Guided Filter, default = `1`,\n
+        `segmentation_pass`: output segmentation only, default = `False`,\n
+        `replace_given_seg`: use the memory trimap as the result trimap in the first frame, default = `False`
+        """
         if rec_seg is None:
             rec_seg, rec_mat = self.default_rec
         is_refine, qimg_sm, mimg_sm, mask_sm = self._smaller_input(qimgs, mimgs, masks, downsample_ratio)
@@ -88,6 +97,15 @@ class FastTrimapPropagationVideoMatting(nn.Module):
         downsample_ratio: float = 1,
         segmentation_pass: bool = False,
     ):
+        """
+        `qimgs`: query frames (b, t, 3, h, w),
+        `m_feat16`: memory key, output of `encode_imgs_to_value`, can be used without encode memory trimap & frames repeatedly
+        `m_value`: memory value, output of `encode_imgs_to_value`, can be used without encode memory trimap & frames repeatedly
+        `rec_seg`: RNN memory of trimap decoder, which is the output of decoder, default = None ,
+        `rec_mat`: RNN memory of matting decoder, which is the output of decoder, default = None,
+        `downsample_ratio`: downsample to process high-res frames, and recovered by Fast Guided Filter, default = 1,
+        `segmentation_pass`: output segmentation only, default = False,
+        """
         if rec_mat is None:
             rec_seg, rec_mat = self.default_rec
         
@@ -110,6 +128,15 @@ class FastTrimapPropagationVideoMatting(nn.Module):
         rec_mat = None,
         replace_seg = None,
     ):
+        """
+        Decode query & fused features to trimaps & mattes\n
+        (and upsample the resulting mattes back to the original resolution).\n
+        return\n
+        `out_seg`: output trimaps (logits) (b, t, 3, h, w)\n
+        `out_mat`: output boundary mattes (b, t, 1, h, w)\n
+        `out_collab`, output complete mattes (b, t, 1, h, w)\n
+        [`rec_seg`, `rec_mat`]: RNN memories
+        """
         # Decode
         qimg_sm_avg = self.avgpool(qimg_sm) # 2, 4, 8
         # Segmentation
@@ -147,7 +174,9 @@ class FastTrimapPropagationVideoMatting(nn.Module):
         if is_refine:
             out_collab = self.refiner(qimgs, qimg_sm, out_collab)
 
-        return [out_seg, out_mat, out_collab, [rec_seg, rec_mat], feats]
+        return [out_seg, out_mat, out_collab, [rec_seg, rec_mat]]
+        # TODO: Remove testing features
+        # return [out_seg, out_mat, out_collab, [rec_seg, rec_mat], feats]
 
     def _smaller_input(self,
         query_img: Tensor,
@@ -166,11 +195,13 @@ class FastTrimapPropagationVideoMatting(nn.Module):
         return is_refine, qimg_sm, mimg_sm, mask_sm
 
     def encode_key(self, imgs):
+        """ encode to feats and query key """
         feats = self.backbone(imgs)
         key = self.trimap_fuse(feats[3]).transpose(1, 2)
         return feats, key
 
     def encode_imgs_to_value(self, imgs, masks, downsample_ratio = 1):
+        """ encode to memory feats & values """
         if downsample_ratio != 1:
             imgs = self._interpolate(imgs, scale_factor=downsample_ratio)
             masks = self._interpolate(masks, scale_factor=downsample_ratio)
