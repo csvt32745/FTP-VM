@@ -1,18 +1,5 @@
 import torch.nn.functional as F
 
-def compute_tensor_iu(seg, gt):
-    intersection = (seg & gt).float().sum()
-    union = (seg | gt).float().sum()
-
-    return intersection, union
-
-def compute_tensor_iou(seg, gt):
-    intersection, union = compute_tensor_iu(seg, gt)
-    iou = (intersection + 1e-6) / (union + 1e-6)
-    
-    return iou 
-
-# STM
 def pad_divide_by(in_img, d):
     h, w = in_img.shape[-2:]
 

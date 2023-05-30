@@ -2,7 +2,7 @@ import argparse
 import torch
 from tqdm import tqdm
 from time import time
-from FTPVM.model import STCNFuseMatting
+from FTPVM.model import FastTrimapPropagationVideoMatting
 from model.which_model import get_model_by_string
 
 torch.backends.cudnn.benchmark = True
