@@ -20,7 +20,7 @@ timm
 ```
 
 # Model Usage
-For those who want  use the model via code directly.
+For those who want to use the model via code directly.
 ```python
 import torch
 from FTPVM.model import FastTrimapPropagationVideoMatting as FTPVM
