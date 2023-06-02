@@ -27,7 +27,7 @@ class HyperParameters():
         parser.add_argument('--num_worker', help='num_workers of dataloader', default=16, type=int)
 
         # Dataset setting
-        parser.add_argument('--use_background_video', help='Composite data with background video as well', action='store_true')
+        parser.add_argument('--use_background_dataset', help='Composite data with background video as well', action='store_true')
         parser.add_argument('--nb_frame_only', help='neighbor frames only', action='store_true')
         parser.add_argument('--get_bgr_pha', help='get pha of bgr by lastframe affine', action='store_true')
         parser.add_argument('--random_memtrimap', help='Given memory trimap != GT trimap', action='store_true')

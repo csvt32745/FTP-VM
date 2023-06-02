@@ -17,11 +17,9 @@ Implementation and videos of **End-to-End Video Matting With Trimap Propagation*
 
 
 # Installation
-(To be updated more)
-For using FTP-VM only, please install the following package via pip.
+Feel free to edit versions of packages for convinience.
 ```
-torch
-timm
+pip install -r requirements.txt
 ```
 
 # Model Usage
@@ -48,7 +46,7 @@ memory_key_val = model.encode_imgs_to_value(memory_imgs, memory_trimaps)
 trimaps, boundary_mattes, full_mattes, recurrent_mems = model.forward_with_memory(query_imgs, *memory_key_val, *recurrent_mems)
 ```
 
-# Inference
+# Inference (TBD)
 
 ## Dataset
 ## Webcam
@@ -58,9 +56,35 @@ still not robust enough to webcam frames :(
 
 # Training (TBD)
 ## Dataset
+Please put them in `dataset` folder at the same level (or symbolic link) as `FTP-VM` folder (this repo).
+```
+- dataset
+  - Distinctions646
+    - Train
+  - VideoMatting108
+    - BG_done
+    - FG_done
+    - ...
+  - BG20k
+    - BG-20k
+  - YoutubeVIS
+    - train
+
+- FTP-VM (Model folder)
+  - train.py
+  - ...
+```
+
+- Image Matting Dataset: [D646](https://github.com/yuhaoliu7456/CVPR2020-HAttMatting)
+- Video Matting Dataset: [VM108](https://github.com/yunkezhang/TCVOM#videomatting108-dataset)
+- Video Object Segmentation Dataset: [YoutubeVIS 2019](https://youtube-vos.org/dataset/vis/)
+- Background Image Dataset: [BG-20k](https://github.com/JizhiziLi/GFM)
+
+If you just want to train on VM108 dataset, please read [VM108 dataset only](###VM108-dataset-only).
+
 ## Run
 
-The setting used in the paper:
+### Main setting
 ```shell
 python train.py \
 --id FTPVM \
@@ -69,7 +93,7 @@ python train.py \
 --benchmark \
 --lr 0.0001 -i 120000 \
 --iter_switch_dataset 30000 \
---use_background_video \
+--use_background_dataset \
 -b_seg 8 -b_img_mat 10 -b_vid_mat 4 \
 -s_seg 8 -s_img_mat 4 -s_vid_mat 8 \
 --seg_cd 20000 --seg_iter 10000 --seg_start 0 --seg_stop 100000 \
@@ -77,7 +101,7 @@ python train.py \
 --tvloss_type temp_seg_allclass_weight
 ```
 
-For using VM108 dataset only:
+### VM108 dataset only
 ```shell
 python train.py \
 --id FTPVM_VM108_only \
@@ -97,7 +121,7 @@ python train.py \
 
 - `--id` : experiment name
 - `--which_model` : defined model name in `model/which_model.py`
-- `--use_background_video` : composite the data with BG20k dataset as well
+- `--use_background_dataset` : composite the data with an additional BG20k dataset as well
 - `--iter_switch_dataset 30000` : switch to video dataset at N iter
 - `-b_seg 8 -b_img_mat 10 -b_vid_mat 4` : batch size of datasets
 - `-s_seg 8 -s_img_mat 4 -s_vid_mat 8` : sequence / clip length of datasets

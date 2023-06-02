@@ -10,7 +10,6 @@ import random
 import numpy as np
 import torch
 from torch.utils.data.dataloader import DataLoader
-from fastai.data.load import DataLoader as FAIDataLoader
 
 from model.model import PropagationModel
 from dataset.youtubevis import *
@@ -108,9 +107,9 @@ def renew_vm108_loader(nb_frame_only=False):
     seq_len=para['seq_len_video_matte']
     batch_size=para['batch_size_video_matte']
     train_dataset = VideoMatteDataset(
-        '../dataset/VideoMatting108_512',
-        '../dataset/BG20k_512/BG-20k/train' if para['use_background_video'] else None,
-        '../dataset/VideoMatting108_512/BG_done',
+        '../dataset/VideoMatting108',
+        '../dataset/BG20k/BG-20k/train' if para['use_background_dataset'] else None,
+        '../dataset/VideoMatting108/BG_done',
         size=size,
         seq_length=seq_len,
         seq_sampler=TrainFrameSampler() if nb_frame_only else TrainFrameSamplerAddFarFrame(),
@@ -128,9 +127,9 @@ def renew_d646_loader(long_seq=True, nb_frame_only=False):
     seq_len=para['seq_len_image_matte']
     batch_size=para['batch_size_image_matte']
     train_dataset = ImageMatteDataset(
-        '../dataset/Distinctions646_512/Train',
-        '../dataset/BG20k_512/BG-20k/train' if para['use_background_video'] else None,
-        '../dataset/VideoMatting108_512/BG_done',
+        '../dataset/Distinctions646/Train',
+        '../dataset/BG20k/BG-20k/train' if para['use_background_dataset'] else None,
+        '../dataset/VideoMatting108/BG_done',
         size=size,
         seq_length=seq_len,
         seq_sampler=TrainFrameSampler() if nb_frame_only else TrainFrameSamplerAddFarFrame(),
