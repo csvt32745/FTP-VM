@@ -173,20 +173,28 @@ def renew_ytvis_loader(nb_frame_only=False):
 """
 Dataset related
 """
-d646_loader = renew_d646_loader(nb_frame_only=para['nb_frame_only'])
 vm108_loader = renew_vm108_loader(nb_frame_only=para['nb_frame_only'])
-train_loader = d646_loader
+if para['iter_switch_dataset'] <= 0:
+    d646_loader = renew_d646_loader(nb_frame_only=para['nb_frame_only'])
+    train_loader = d646_loader
+else:
+    d646_loader = None
+    train_loader = vm108_loader
 
 # Load dataset if required
 if total_iter < para['seg_stop']:
     seg_loader = renew_ytvis_loader(nb_frame_only=para['nb_frame_only'])
 
 """
-Determine current/max epoch
+Roughly determine current/max epoch, 
+training progress is based on iteration instead of epoch
 """
-iter_base = min(len(d646_loader), len(vm108_loader), para['seg_iter'])
+if d646_loader is None:
+    iter_base = min(len(vm108_loader), para['seg_iter'])
+else:
+    iter_base = min(len(d646_loader), len(vm108_loader), para['seg_iter'])
 total_epoch = math.ceil(para['iterations']/iter_base)
-current_epoch = total_iter // max(len(d646_loader), len(vm108_loader), para['seg_iter'])
+current_epoch = total_iter // iter_base - 1
 
 """
 Starts training
