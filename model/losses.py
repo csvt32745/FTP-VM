@@ -8,46 +8,6 @@ import kornia as K
 import einops
 from functools import lru_cache
 
-
-def get_iou_hook(values):
-    return 'iou/iou', (values['hide_iou/i']+1)/(values['hide_iou/u']+1)
-
-def get_sec_iou_hook(values):
-    return 'iou/sec_iou', (values['hide_iou/sec_i']+1)/(values['hide_iou/sec_u']+1)
-
-iou_hooks_so = [
-    # get_iou_hook,
-]
-
-iou_hooks_mo = [
-    # get_iou_hook,
-    # get_sec_iou_hook,
-]
-
-# https://stackoverflow.com/questions/63735255/how-do-i-compute-bootstrapped-cross-entropy-loss-in-pytorch
-class BootstrappedCE(nn.Module):
-    def __init__(self, start_warm=5000, end_warm=60000, top_p=0.15):
-        super().__init__()
-
-        self.start_warm = start_warm
-        self.end_warm = end_warm
-        self.top_p = top_p
-
-    def forward(self, input, target, it):
-        if it < self.start_warm:
-            return F.cross_entropy(input, target)
-
-        raw_loss = F.cross_entropy(input, target, reduction='none').view(-1)
-        num_pixels = raw_loss.numel()
-
-        if it > self.end_warm:
-            this_p = self.top_p
-        else:
-            this_p = self.top_p + (1-self.top_p)*((self.end_warm-it)/(self.end_warm-self.start_warm))
-        # loss, _ = torch.topk(raw_loss, int(num_pixels * this_p), sorted=False)
-        loss, _ = raw_loss.sort(descending=True)[:int(num_pixels * this_p)]
-        return loss.mean()
-
 class FocalLoss(nn.Module):
     # https://github.com/AdeelH/pytorch-multi-class-focal-loss/blob/master/focal_loss.py
     """ Focal Loss, as described in https://arxiv.org/abs/1708.02002.
@@ -142,8 +102,6 @@ class SegLossComputer:
         super().__init__()
         self.para = para
         self.bce = nn.BCEWithLogitsLoss()
-        self.bsce = BootstrappedCE()
-        # assert (celoss_type:=para['celoss_type']) in ['focal', 'normal', 'normal_weight', 'focal_weight']
         celoss_type=para['celoss_type']
         self.ce = {
             'focal': FocalLoss,
@@ -155,13 +113,11 @@ class SegLossComputer:
             'focal_gamma0.5': lambda: FocalLoss(gamma=0.5).cuda(),
         }[celoss_type]()
         self.avg2d = nn.AvgPool3d((1, 2, 2))
-        self.avg2d_bg = nn.AvgPool3d((1, 4, 4))
         self.tvloss = TotalVariationLoss(para['tvloss_type']).cuda()
         self.lambda_tvloss = para['lambda_segtv']
         self.start_tvloss = para['start_segtv']
 
     def compute(self, data, it):
-         # logit
         losses = {}
         logits = data['logits']
         # mask = data['mask']
@@ -178,44 +134,14 @@ class SegLossComputer:
 
         elif size == 1:
             gt = data['gt']
-            # label = get_label_from_trimap(data['trimap'])
             losses['seg_bce'] = self.bce(logits, gt)
-
-        # BG predict
-        # if (bg_out:=get_extra_outs(data, 'extra_outs', [3, 4])) is not None:
-        #     # weight = 1-self.avg2d_bg(gt)
-        #     # losses['bg_l1'] = L1_mask(bg_out, self.avg2d_bg(data['rgb'][:, 1:]), mask=weight)*0.2
-        #     if bg_out.size(2) == 4:
-        #         bg_out, coarse_mask = bg_out.split([3, 1], dim=2)
-        #         losses['coarse_mask_l1'] = L1_mask(coarse_mask, self.avg2d_bg(gt))*0.5
-        #         data['coarse_mask'] = coarse_mask
-        #     data['pred_bg'] = bg_out
         
         losses['total_loss'] = sum(losses.values())
         return data, losses
 
     def gfm_loss(self, it, logits, label):
-        # return self.fce(logits, mask)
-
-        # label = torch.zeros_like(mask, dtype=torch.long)
-        # cond = mask > 0.5
-        # label[cond] = 2 # fg
-
-        # return self.bsce(logits.flatten(0, 1), label.flatten(0, 1)[:, 0], it)
         return self.ce(logits.flatten(0, 1), label.flatten(0, 1))
 
-
-
-def get_extra_outs(data: dict, key, expect_ch=1):
-    if type(expect_ch) in [list, tuple]:
-        cmp = lambda x, y: x in y
-    else:
-        cmp = lambda x, y: x == y
-    if ((extra_outs := data.get(key, None)) is not None):
-        if (isinstance(extra_outs, list) and cmp(extra_outs[0].size(2), expect_ch)) \
-            or cmp(extra_outs.size(2), expect_ch):
-            return extra_outs
-    return None
 
 class MatLossComputer:
     def __init__(self, para):
@@ -233,10 +159,8 @@ class MatLossComputer:
             'focal_gamma5': lambda: FocalLoss(gamma=5).cuda(),
             'focal_gamma0.5': lambda: FocalLoss(gamma=0.5).cuda(),
         }[celoss_type]()
-        self.bsce = BootstrappedCE()
         self.spatial_grad = K.filters.SpatialGradient()
         self.avg2d = nn.AvgPool3d((1, 2, 2))
-        self.avg2d_bg = nn.AvgPool3d((1, 4, 4))
         self.tvloss = TotalVariationLoss(para['tvloss_type']).cuda()
         self.lambda_tvloss = para['lambda_segtv']
         self.start_tvloss = para['start_segtv']
@@ -256,16 +180,6 @@ class MatLossComputer:
         # trimap = data['trimap']
         losses = {}
         
-        # if (bg_out:=get_extra_outs(data, 'extra_outs', [3, 4])) is not None:
-        #     gt_mask_x4 = self.avg2d_bg(gt_mask)
-        #     if bg_out.size(2) == 4:
-        #         bg_out, coarse_mask = bg_out.split([3, 1], dim=2)
-        #         losses['coarse_mask_l1'] = L1_mask(coarse_mask, gt_mask_x4)*0.5
-        #         data['coarse_mask'] = coarse_mask
-        #     bg_pha = torch.cumsum(1-self.avg2d_bg(data['bgr_pha']), dim=0).clamp(0, 1)
-        #     weight = (1+gt_mask_x4[:, 1:])*bg_pha
-        #     losses['bg_l1'] = L1_mask(bg_out[:, 1:], self.avg2d_bg(data['bg'][:, 1:]), mask=weight)*0.05
-        #     data['pred_bg'] = bg_out
 
         if 'collab' in data:
             if self.full_matte:
@@ -275,35 +189,20 @@ class MatLossComputer:
             losses['total_loss'] = sum(losses.values())
             return data, losses
 
-        # if 'pred_fg' in data:
-        #     # losses.update(
-        #     #     self.matting_loss(mask, gt_mask, data['pred_fg'], data['fg_query'], 
-        #     #         feats=self.unpack_data_with_bgnum(data, 'feats'))
-        #     # )# if it >= 60000 else None) # TODO
-        #     losses.update(
-        #         self.matting_loss(it, mask, gt_mask, data['pred_fg'], data['fg_query']
-        #             )
-        #             # feats=self.unpack_data_with_bgnum(data, 'feats'))
-        #     )# if it >= 60000 else None) # TODO
-        # else:
-        losses.update(self.matting_loss(it, mask, gt_mask))#, data['fg'], data['bg'], data['rgb'])
+        losses.update(self.matting_loss(it, mask, gt_mask))
         
         losses['total_loss'] = sum(losses.values())
         return data, losses
-
 
     def gfm_loss(self, it, data, gt_mask):
         loss = {}
         logits = data['glance']
         trimap = data['trimap_query']
         label = get_label_from_trimap(trimap)
-        # loss['seg_bce'] = self.bsce(logits.flatten(0, 1), label.flatten(0, 1), it)
         loss['seg_bce'] = self.ce(logits.flatten(0, 1), label.flatten(0, 1))
-        # loss['seg_bce'], target = self.fce(logits, trimap, True) # return target = True
         if it >= self.start_tvloss:
             loss['seg_tv'] = self.tvloss(logits, label)*self.lambda_tvloss
 
-        # for k, v in self.alpha_loss(data['focus'], gt_mask, mask=target[:, :, [1]]).items():
         for k, v in self.alpha_loss(data['focus'], gt_mask, mask=(label==1).unsqueeze(2)).items():
             loss['focus_'+k] = v
         for k, v in self.alpha_loss(data['collab'], gt_mask).items():
@@ -315,9 +214,7 @@ class MatLossComputer:
         logits = data['glance']
         trimap = data['trimap_query']
         label = get_label_from_trimap(trimap)
-        # loss['seg_bce'] = self.bsce(logits.flatten(0, 1), label.flatten(0, 1), it)
         loss['seg_bce'] = self.ce(logits.flatten(0, 1), label.flatten(0, 1))
-        # loss['seg_bce'], target = self.fce(logits, trimap, True) # return target = True
         if it >= self.start_tvloss:
             loss['seg_tv'] = self.tvloss(logits, label)*self.lambda_tvloss
 
@@ -330,9 +227,6 @@ class MatLossComputer:
 
         # Alpha losses
         loss['pha_l1'] = L1_mask(pred_pha, true_pha, mask)
-        # loss['pha_l1_l2'] = L1L2_split_loss(pred_pha_, true_pha_)
-        # loss['pha_laplacian'] = laplacian_loss(pred_pha.flatten(0, 1), true_pha.flatten(0, 1))
-        # loss['pha_grad'] = F.l1_loss(K.filters.sobel(pred_pha), K.filters.sobel(true_pha))
         if mask is not None:
             pred_pha = pred_pha*mask
             true_pha = true_pha*mask
@@ -342,13 +236,9 @@ class MatLossComputer:
         loss['pha_coherence'] = F.mse_loss(pred_pha[:, 1:] - pred_pha[:, :-1],
                                            true_pha[:, 1:] - true_pha[:, :-1]) * self.lambda_tcloss
 
-        # pred_grad = self.spatial_grad(pred_pha)
-        # true_grad = self.spatial_grad(true_pha)
-        # loss['pha_grad'] = F.l1_loss(pred_grad, true_grad)
-        # loss['pha_grad_punish'] = 0.001 * torch.abs(pred_grad).mean()
         return loss
 
-    def matting_loss(self, it, pred_pha, true_pha, pred_fgr=None, true_fgr=None, feats=None):
+    def matting_loss(self, it, pred_pha, true_pha, pred_fgr=None, true_fgr=None):
         """
         Args:
             pred_fgr: Shape(B, T, 3, H, W)
@@ -364,8 +254,6 @@ class MatLossComputer:
         # Foreground losses
         true_msk = true_pha.gt(0) # > 0
         if pred_fgr is not None:
-            # composited = fg*pred_pha + bg*(1-pred_pha)
-            # loss['fgr_l1'] = F.l1_loss(pred_fgr, true_fgr)
             loss['fgr_l1'] = L1_mask(pred_fgr, true_fgr, true_msk)
             pred_fgr = pred_fgr * true_msk
             true_fgr = true_fgr * true_msk

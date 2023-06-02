@@ -4,8 +4,6 @@ Dumps things to tensorboard and console
 
 import os
 import warnings
-import git
-
 import torchvision.transforms as transforms
 from torch.utils.tensorboard import SummaryWriter
 
@@ -42,9 +40,6 @@ class TensorboardLogger:
 
             log_path = os.path.join('.', 'log', '%s' % id)
             self.logger = SummaryWriter(log_path)
-
-        repo = git.Repo(".")
-        self.log_string('git', str(repo.active_branch) + ' ' + str(repo.head.commit.hexsha))
 
     def log_scalar(self, tag, x, step):
         if self.no_log:

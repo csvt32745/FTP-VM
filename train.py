@@ -98,39 +98,21 @@ if para['load_network'] is not None:
 """
 Dataloader related
 """
-# To re-seed the randomness everytime we start a worker
-def worker_init_fn(worker_id): 
-    return np.random.seed(torch.initial_seed()%(2**31))
-    # return np.random.seed(torch.initial_seed()%(2**31) + worker_id + local_rank*100)
-
-def construct_loader(dataset, batch_size=para['batch_size']):
-    # train_sampler = torch.utils.data.distributed.DistributedSampler(dataset, rank=local_rank, shuffle=True)
-    # train_loader = DataLoader(dataset, para['batch_size'], sampler=train_sampler, num_workers=para['num_worker'],
+def construct_loader(dataset, batch_size):
     train_loader = DataLoader(dataset, batch_size, num_workers=para['num_worker'],
                                 shuffle=True, drop_last=True, pin_memory=True)
-                            # worker_init_fn=worker_init_fn, drop_last=True, pin_memory=True)
-    # train_loader = FAIDataLoader(
-    #     dataset = dataset,
-    #     batch_size=batch_size,
-    #     num_workers=para['num_worker'],
-    #     pin_memory=True, 
-    #     shuffle=True, 
-    #     drop_last=True,
-    #     timeout=60,
-    # )
     return train_loader
 
-def renew_vm108_loader(long_seq=True, nb_frame_only=False):
-    # size=512
+def renew_vm108_loader(nb_frame_only=False):
     size=para['size']
+    seq_len=para['seq_len_video_matte']
+    batch_size=para['batch_size_video_matte']
     train_dataset = VideoMatteDataset(
-        '../dataset_sc/VideoMatting108_512',
-        # '../dataset_sc/BG20k_512/BG-20k/train',
-        None,
-        '../dataset_sc/VideoMatting108_512/BG_done',
+        '../dataset/VideoMatting108_512',
+        '../dataset/BG20k_512/BG-20k/train' if para['use_background_video'] else None,
+        '../dataset/VideoMatting108_512/BG_done',
         size=size,
-        # seq_length=12 if long_seq else 5,
-        seq_length=6 if long_seq else 8,
+        seq_length=seq_len,
         seq_sampler=TrainFrameSampler() if nb_frame_only else TrainFrameSamplerAddFarFrame(),
         transform=VideoMatteTrainAugmentation(size, get_bgr_pha=para['get_bgr_pha']),
         is_VM108=True,
@@ -138,71 +120,67 @@ def renew_vm108_loader(long_seq=True, nb_frame_only=False):
         get_bgr_phas=para['get_bgr_pha'],
         random_memtrimap=para['random_memtrimap'],
     )
-    print('VM108 dataset size: ', len(train_dataset))
-
-    # return construct_loader(train_dataset, batch_size=2 if long_seq else 2)
-    return construct_loader(train_dataset, batch_size=4 if long_seq else 4)
+    print(f'VM108 dataset size: {len(train_dataset)}, batch size: {batch_size}, sequence length: {seq_len}, frame size: {size}')
+    return construct_loader(train_dataset, batch_size=batch_size)
 
 def renew_d646_loader(long_seq=True, nb_frame_only=False):
-    # size=512
     size=para['size']
+    seq_len=para['seq_len_image_matte']
+    batch_size=para['batch_size_image_matte']
     train_dataset = ImageMatteDataset(
-        '../dataset_sc/Distinctions646_512/Train',
-        None,
-        # '../dataset_sc/BG20k_512/BG-20k/train',
-        '../dataset_sc/VideoMatting108_512/BG_done',
+        '../dataset/Distinctions646_512/Train',
+        '../dataset/BG20k_512/BG-20k/train' if para['use_background_video'] else None,
+        '../dataset/VideoMatting108_512/BG_done',
         size=size,
-        # seq_length=6 if long_seq else 3,
-        seq_length=3 if long_seq else 4,
+        seq_length=seq_len,
         seq_sampler=TrainFrameSampler() if nb_frame_only else TrainFrameSamplerAddFarFrame(),
         transform=ImageMatteAugmentation(size, get_bgr_pha=para['get_bgr_pha']),
         bg_num=1,
         get_bgr_phas=para['get_bgr_pha'],
         random_memtrimap=para['random_memtrimap'],
     )
-    print('D646 dataset size: ', len(train_dataset))
+    print(f'D646 dataset size: {len(train_dataset)}, batch size: {batch_size}, sequence length: {seq_len}, frame size: {size}')
 
-    # return construct_loader(train_dataset, batch_size=8 if long_seq else 4)
-    return construct_loader(train_dataset, batch_size=12 if long_seq else 10)
+    return construct_loader(train_dataset, batch_size=batch_size)
 
-def renew_ytvis_loader(long_seq=True, nb_frame_only=False):
+def renew_ytvis_loader(nb_frame_only=False):
     size = min(352, para['size'])
-    # size = para['size']
+    seq_len=para['seq_len_seg']
+    batch_size=para['batch_size_seg']
     speed = [0.5, 1, 2]
     if para['ytvos']:
         train_dataset = YouTubeVOSDataset(
-            '../dataset_sc/YoutubeVOS/train',
+            '../dataset/YoutubeVOS/train',
             size, 
-            8 if long_seq else 8,
+            seq_len,
             TrainFrameSampler(speed) if nb_frame_only else TrainFrameSamplerAddFarFrame(speed),
             YouTubeVISAugmentation(size),
             random_memtrimap=para['random_memtrimap'],
         )
     else:
         train_dataset = YouTubeVISDataset(
-            '../dataset_sc/YoutubeVIS/train/JPEGImages',
-            '../dataset_sc/YoutubeVIS/train/instances.json',
+            '../dataset/YoutubeVIS/train/JPEGImages',
+            '../dataset/YoutubeVIS/train/instances.json',
             size, 
-            8 if long_seq else 8,
+            seq_len,
             TrainFrameSampler(speed) if nb_frame_only else TrainFrameSamplerAddFarFrame(speed),
             YouTubeVISAugmentation(size),
             random_memtrimap=para['random_memtrimap'],
         )
-    print('YTVis dataset size: ', len(train_dataset))
+    print(f'YT Segmentation dataset size: {len(train_dataset)}, batch size: {batch_size}, sequence length: {seq_len}, frame size: {size}')
 
-    # return construct_loader(train_dataset, batch_size=12 if long_seq else 6)
-    return construct_loader(train_dataset, batch_size=8 if long_seq else 8)
+    return construct_loader(train_dataset, batch_size)
 
 """
 Dataset related
 """
-print('Use longer sequence: ', para['long_seq'])
-d646_loader = renew_d646_loader(long_seq=para['long_seq'], nb_frame_only=para['nb_frame_only'])
-vm108_loader = renew_vm108_loader(long_seq=para['long_seq'], nb_frame_only=para['nb_frame_only'])
+d646_loader = renew_d646_loader(nb_frame_only=para['nb_frame_only'])
+vm108_loader = renew_vm108_loader(nb_frame_only=para['nb_frame_only'])
 train_loader = d646_loader
-    
+
+# Load dataset if required
 if total_iter < para['seg_stop']:
-    seg_loader = renew_ytvis_loader(long_seq=para['long_seq'], nb_frame_only=para['nb_frame_only'])
+    seg_loader = renew_ytvis_loader(nb_frame_only=para['nb_frame_only'])
 
 """
 Determine current/max epoch
@@ -214,8 +192,7 @@ current_epoch = total_iter // max(len(d646_loader), len(vm108_loader), para['seg
 """
 Starts training
 """
-# Need this to select random bases in different workers
-np.random.seed(np.random.randint(2**30-1))# + local_rank*100)
+np.random.seed(np.random.randint(2**30-1))
 if is_dataset_switched := (total_iter >= para['iter_switch_dataset']):
     print('Switch to video dataset!')
     train_loader = vm108_loader

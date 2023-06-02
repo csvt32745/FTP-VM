@@ -20,7 +20,7 @@ root = args.root
 input_resize=(1920, 1080)
 
 outroot = args.out_root
-model_name = 'STCNFuseMatting_test'
+model_name = 'FTPVM'
 # downsample_ratio=0.5
 os.makedirs(outroot, exist_ok=True)
 def check_and_load_model_dict(model, state_dict: dict):
