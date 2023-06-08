@@ -178,8 +178,13 @@ segmentation training starts at 0th iter, runs for 10000 iters followed by 20000
     pages     = {14337-14347}
 }
 ```
-## Useful Repositories
-(TBD)
-RVM
-MiVOS
-STCN
+## Useful Implementation
+- [RVM](https://github.com/PeterL1n/RobustVideoMatting)
+  - Fast Guided Filter
+  - Inference code
+- [MiVOS](https://github.com/hkchengrex/MiVOS)
+  - [STCN](https://github.com/hkchengrex/STCN)
+  - [XMem](https://github.com/hkchengrex/XMem)
+  - MiVOS inspired me to leverage video object segmentation on video matting (though it's been already applied in earlier researches)
+  - Overall architecture
+  - Their works are so amazing :)a
