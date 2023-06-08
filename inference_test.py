@@ -1,16 +1,4 @@
-"""
-python inference.py \
-    --variant mobilenetv3 \
-    --checkpoint "CHECKPOINT" \
-    --device cuda \
-    --input-source "input.mp4" \
-    --output-type video \
-    --output-composition "composition.mp4" \
-    --output-alpha "alpha.mp4" \
-    --output-foreground "foreground.mp4" \
-    --output-video-mbps 4 \
-    --seq-chunk 1
-"""
+# Modified from https://github.com/PeterL1n/RobustVideoMatting
 
 import torch
 import os
@@ -67,7 +55,6 @@ def convert_video(model,
     assert output_type in ['video', 'png_sequence'], 'Only support "video" and "png_sequence" output modes.'
     assert seq_chunk >= 1, 'Sequence chunk must be >= 1'
     assert num_workers >= 0, 'Number of workers must be >= 0'
-    
     # Initialize transform
     if input_resize is not None:
         s = Image.open(memory_img).size
@@ -125,7 +112,6 @@ def convert_video(model,
         param = next(model.parameters())
         dtype = param.dtype
         device = param.device
-    
     m_img = transform(Image.open(memory_img)).unsqueeze(0).unsqueeze(0).to(device)
     if memory_mask is not None and memory_mask != '':
         m_mask = transform(Image.open(memory_mask).convert(mode='L')).unsqueeze(0).unsqueeze(0).to(device)
@@ -134,18 +120,15 @@ def convert_video(model,
         shape = list(m_img.shape) # b t c h w
         shape[2] = 1
         m_mask = torch.zeros(shape, dtype=m_img.dtype, device=m_img.device)
-    print(m_img.shape, m_mask.shape)
-    # if (output_composition is not None) and (output_type == 'video'):
     bgr = torch.tensor([120, 255, 155], device=device, dtype=dtype).div(255).view(1, 1, 3, 1, 1)
     
-    # print(downsample_ratio)
     try:
         with torch.no_grad():
             bar = tqdm(total=len(source), disable=not progress, dynamic_ncols=True)
             rec = model.default_rec
             memory = None
             for src in reader:
-
+                
                 if downsample_ratio is None:
                     downsample_ratio = auto_downsample_ratio(*src.shape[2:], target=target_size)
                     print(downsample_ratio)
@@ -153,7 +136,9 @@ def convert_video(model,
                     memory = model.encode_imgs_to_value(m_img, m_mask, downsample_ratio=downsample_ratio)
 
                 src = src.to(device, dtype, non_blocking=True).unsqueeze(0) # [B, T, C, H, W]
-                trimap, matte, pha, rec, _ = model.forward_with_memory(src, *memory, *rec, downsample_ratio=downsample_ratio)
+                
+                trimap, matte, pha, rec = model.forward_with_memory(src, *memory, *rec, downsample_ratio=downsample_ratio)
+
                 pha = pha.clamp(0, 1)
                 trimap = seg_to_trimap(trimap)
 
@@ -161,6 +146,7 @@ def convert_video(model,
                 
                 if output_foreground is not None:
                     writer_fgr.write(fgr[0])
+                    
                 if output_alpha is not None:
                     writer_pha.write(pha[0])
 
@@ -217,7 +203,7 @@ if __name__ == '__main__':
     import argparse
     
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model', type=str, required=True)
+    parser.add_argument('--model', type=str, required=False, default='FTPVM')
     # parser.add_argument('--checkpoint', type=str, required=True)
     parser.add_argument('--gpu', type=int, default=0)
     parser.add_argument('--input-source', type=str, required=True)

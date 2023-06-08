@@ -52,7 +52,43 @@ trimaps, boundary_mattes, full_mattes, recurrent_mems = model.forward_with_memor
 ## Webcam
 still not robust enough to webcam frames :(
 ## Raw video
-
+The code is borrowed from [RVM](https://github.com/PeterL1n/RobustVideoMatting)
+```shell
+usage: python inference_footages.py [-h] --root ROOT --out_root OUT_ROOT
+                             [--gpu GPU] [--target_size TARGET_SIZE]
+                             [--seq_chunk SEQ_CHUNK]
+optional arguments:
+  -h, --help            show this help message and exit
+  --root ROOT           input video root
+  --out_root OUT_ROOT   output video root
+  --gpu GPU             gpu id, default = 0
+  --target_size TARGET_SIZE
+                        downsample the video by ratio of the larger width
+                        to target_size, and upsampled back by FGF.
+                        default = 1024
+  --seq_chunk SEQ_CHUNK
+                        frames to process in a batch
+                        default = 4
+```
+You need to put 1 video with 1 thumbnail & trimap as memory pairs at least, where the thumbnail is suggested but not required to be the first frame.
+More trimaps will generate different results.
+```
+- root
+  - video1.mp4
+  - video1_thumbnail.png
+  - video1_trimap.png
+  - video1_trimap2.png
+  - ...
+- out_root
+  - video1__com.mp4
+  - video1__fgr.mp4
+  - video1__pha.mp4
+  - video1_2_com.mp4
+  - video1_2_fgr.mp4
+  - video1_2_pha.mp4
+  - ...
+```
+For more precised control, please refer to `inference_test.py`.
 
 # Training (TBD)
 ## Dataset
