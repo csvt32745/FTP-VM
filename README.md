@@ -17,7 +17,7 @@ Implementation and videos of **End-to-End Video Matting With Trimap Propagation*
 
 
 # Installation
-Feel free to edit versions of packages for convinience.
+Feel free to edit versions of packages for convenience.
 ```
 pip install -r requirements.txt
 ```
@@ -187,4 +187,4 @@ segmentation training starts at 0th iter, runs for 10000 iters followed by 20000
   - [XMem](https://github.com/hkchengrex/XMem)
   - MiVOS inspired me to leverage video object segmentation on video matting (though it's been already applied in earlier researches)
   - Overall architecture
-  - Their works are so amazing :)a
+  - Their works are so amazing :)
