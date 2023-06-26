@@ -51,6 +51,14 @@ class VM108ValidationDataset(Dataset):
 
         self.to_tensor = transforms.ToTensor()
 
+    def set_frames_per_item(self, frames_per_item):
+        if 'frames_per_item' in dir(self):
+            print("Set dataset batch from %d to %d" % (self.frames_per_item, frames_per_item))
+            if frames_per_item == self.frames_per_item:
+                return
+        self.frames_per_item = frames_per_item
+        self.prepare_frame_list()
+
     def prepare_frame_list(self):
         with open(os.path.join(self.root, 'frame_corr.json'), 'r') as f:
             self.frame_corr = json.load(f)
@@ -151,52 +159,7 @@ class VM108ValidationDataset(Dataset):
     def __len__(self):
         return self.dataset_length
 
-class VM108ValidationDatasetFixFG(VM108ValidationDataset):
-    def __init__(self, 
-        root='../dataset_mat/VideoMatting108', 
-        fg_list_path='', bg_list_path='',
-        size=512, frames_per_item=0,
-        trimap_width=25,
-    ):
-        self.fg_list_path = fg_list_path
-        self.bg_list_path = bg_list_path
-        
-        super().__init__(root, size, frames_per_item, trimap_width=trimap_width)
-
-    def read_imgs(self, names):
-        # names == [fg_name, bg_name]
-        fg, gt = self.read_fg_gt(names[0])
-        bg = self.read_bg(names[1])
-        return fg, gt, bg
-
-    def prepare_frame_list(self):
-        self.videos = []
-        self.idx_to_vid_and_chunk = []
-        self.num_frames_of_video = {}
-        
-        with open(self.fg_list_path, 'r') as f:
-            self.fg_clips = [l.strip() for l in f.readlines()]
-        with open(self.bg_list_path, 'r') as f:
-            self.bg_clips = [l.strip() for l in f.readlines()]
-
-        for fg_path, bg_path in itertools.product(self.fg_clips, self.bg_clips):
-            
-            fg_frames = [os.path.join(fg_path, p) for p in sorted(os.listdir(os.path.join(self.root, self.FG_FOLDER, fg_path)))]
-            bg_frames = [os.path.join(bg_path, p) for p in sorted(os.listdir(os.path.join(self.root, self.BG_FOLDER, bg_path)))]
-            vid_name = '%s-%s' % (fg_path.replace('-', '_'), bg_path.replace('-', '_'))
-            vid_name = vid_name.replace('/', '_')
-            
-            len_fg = len(fg_frames)
-            self.num_frames_of_video[vid_name] = len_fg
-
-            bg_frames = stretch_bg_frames(bg_frames, len_fg)
-            frames = list(zip(fg_frames, bg_frames))
-            frames = split_frames(frames, self.frames_per_item)
-            self.idx_to_vid_and_chunk.extend(list(zip([vid_name]*len(frames), frames)))
-            self.videos.append(vid_name)
-
-
-class VM240KValidationDataset(Dataset):
+class ValidationDataset(Dataset):
     """ Just read the imgs, can be used in any dataset """
     def __init__(self, 
         root='../dataset_mat/videomatte_motion_sd', 
@@ -318,7 +281,7 @@ class VM240KValidationDataset(Dataset):
     def get_num_frames(self, video):
         return self.num_frames_of_video[video]
 
-class ClipShuffleValidationDataset(VM240KValidationDataset):
+class ClipShuffleValidationDataset(ValidationDataset):
     """
     Shuffle the split clips in the video with given clip-length
     Simulate the scene change

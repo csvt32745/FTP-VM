@@ -290,27 +290,6 @@ class InferenceCoreRecurrent(InferenceCore):
         self.mem_idx = -1
         self.replace_by_given_tri = replace_by_given_tri
     
-    # def _forward(self, query_imgs, memory_img, memory_mask):
-    #     ret = self.model.forward(query_imgs, memory_img, memory_mask, *self.gru_mems, downsample_ratio=self.downsample_ratio)
-    #     if self.disable_recurrent:
-    #         pha, _ = ret[:2]
-    #     else:
-    #         pha, self.gru_mems = ret[:2]
-
-    #     bg = ret[-1]
-    #     self.save_bg = self.save_bg or (isinstance(bg, torch.Tensor) and (bg.size(2) in [3, 4]))
-    #     if pha.size(2) > 1:
-    #         pha = pha[:, :, [0]]
-    #     if self.masks is None:
-    #         self.masks = pha[0].cpu() 
-    #         if self.save_bg:
-    #             self.bgs = bg[0, :, :3].cpu()
-    #     else:
-    #         self.masks = torch.cat([self.masks, pha[0].cpu()], 0)
-    #         if self.save_bg:
-    #             self.bgs = torch.cat([self.bgs, bg[0, :, :3].cpu()], 0)
-    #     return pha
-    
     def _forward(self, query_imgs, memory_img, memory_mask, replace_tri=False):
         # ret = self.model.forward(query_imgs, memory_img, memory_mask, *self.gru_mems, downsample_ratio=self.downsample_ratio)
         ret = self.model.forward_with_memory(query_imgs, *self.memory_bank.get_memory(), *self.gru_mems, self.downsample_ratio)
@@ -319,21 +298,15 @@ class InferenceCoreRecurrent(InferenceCore):
         else:
             pha, self.gru_mems = ret[:2]
 
-        bg = ret[-1]
-        self.save_bg = self.save_bg or (isinstance(bg, torch.Tensor) and (bg.size(2) in [3, 4]))
         if pha.size(2) > 1:
             pha = pha[:, :, [0]]
         if self.masks is None:
             self.masks = pha[0].cpu() 
-            if self.save_bg:
-                self.bgs = bg[0, :, :3].cpu()
         else:
             self.masks = torch.cat([self.masks, pha[0].cpu()], 0)
-            if self.save_bg:
-                self.bgs = torch.cat([self.bgs, bg[0, :, :3].cpu()], 0)
         return pha
 
-    def propagate(self, frame_idx=0, end_idx=-1, tmp_save_root=''):
+    def propagate(self, frame_idx=0, end_idx=-1):
         if end_idx < 0:
             end_idx = self.total_frames
         
@@ -347,16 +320,16 @@ class InferenceCoreRecurrent(InferenceCore):
         mask = self.get_memory_mask(mask_idx).unsqueeze(0)
         # =====================
 
-        # TODO
-        # mem_mask = torch.zeros_like(mask, device='cuda').unsqueeze(0) # 1, 1, 1, H, W
+        # Initial memory mask
         mem_mask = mask.unsqueeze(0).cuda() # 1, 1, 1, H, W
         mem_rgb = self.get_memory_img(mask_idx).unsqueeze(0).unsqueeze(0).cuda() # 1, 1, C, H, W
         frame_count = 0
         frame_count_savemem = 0
         total_time = 0
         self.memory_bank.add_gt_memory(*self.model.encode_imgs_to_value(mem_rgb, mem_mask, self.downsample_ratio))
-        # for i in tqdm(range(10)):
+
         for i in tqdm(range(len(this_range)-1)):
+            # batch processing
             start, end = this_range[i:i+2]
             while self.current_t < end:
                 self.add_images_from_loader()
@@ -364,6 +337,7 @@ class InferenceCoreRecurrent(InferenceCore):
             replace_tri = False
 
             if self.memory_iter >= 0 and frame_count >= self.memory_iter:
+                # Feed memory mask
                 mem_rgb = self.get_memory_img(start).unsqueeze(0).unsqueeze(0).cuda()
                 mem_mask = self.get_memory_mask(start).unsqueeze(0).unsqueeze(0).cuda()
                 self.memory_bank.add_gt_memory(*self.model.encode_imgs_to_value(mem_rgb, mem_mask, self.downsample_ratio))
@@ -371,22 +345,18 @@ class InferenceCoreRecurrent(InferenceCore):
                 replace_tri = True
             
             if self.memory_save_iter > 0 and frame_count_savemem >= self.memory_save_iter:
+                # Self-feed memory mask from output trimap
                 frame_count_savemem = frame_count_savemem-self.memory_save_iter
                 self.add_memory_bank(start-frame_count_savemem-1)
             time_start = time()
             out = self.forward(rgb, mem_rgb, mem_mask, replace_tri=(replace_tri and self.replace_by_given_tri))
             total_time += time()-time_start
             
-            if self.downsample_ratio != 1 and tmp_save_root != '':
-                self.save_naive_upsampled_imgs(tmp_save_root, self.model.tmp_out_collab[0].cpu(), start, end)
-
             dt = (end-start)
             frame_count += dt
             frame_count_savemem += dt
             self.current_out_t = end
             
-            # if end >= 60:
-            #     break
         
         return (end_idx-frame_idx)/total_time
 
@@ -397,6 +367,7 @@ class InferenceCoreRecurrent(InferenceCore):
         return self.gt_bgs[idx] if self.memory_bg else self.images[idx]
 
     def add_memory_bank(self, idx):
+        """ feed memory with self output trimap """
         raise NotImplementedError
 
 class InferenceCoreRecurrentMemory(InferenceCoreRecurrent):
@@ -408,44 +379,23 @@ class InferenceCoreRecurrentMemory(InferenceCoreRecurrent):
         self.save_bg = False
 
     def add_memory_bank(self, idx):
-        # print("Add mem: ", idx)
         self.mem_idx = idx
         rgb = self.images[idx].unsqueeze(0).unsqueeze(0).cuda()
-        # tri = self.trimaps[idx].unsqueeze(0).unsqueeze(0).cuda()
         tri = self.glance_outs[idx].unsqueeze(0).unsqueeze(0).cuda()
         self.memory_bank.add_memory(*self.model.encode_imgs_to_value(rgb, tri), self.downsample_ratio)
 
     def _forward(self, query_imgs, memory_img, memory_mask, replace_tri=False):
         if self.memory_save_iter < 0 and replace_tri:
-            glance, focus, pha, gru_mems, bg = self.model.forward(query_imgs, memory_img, memory_mask, *self.gru_mems, downsample_ratio=self.downsample_ratio, replace_given_seg=replace_tri)
+            glance, focus, pha, gru_mems = self.model.forward(query_imgs, memory_img, memory_mask, *self.gru_mems, downsample_ratio=self.downsample_ratio, replace_given_seg=replace_tri)
         else:
-            glance, focus, pha, gru_mems, bg = self.model.forward_with_memory(query_imgs, *self.memory_bank.get_memory(), *self.gru_mems, downsample_ratio=self.downsample_ratio)
+            glance, focus, pha, gru_mems = self.model.forward_with_memory(query_imgs, *self.memory_bank.get_memory(), *self.gru_mems, downsample_ratio=self.downsample_ratio)
 
         if not self.disable_recurrent:
             self.gru_mems = gru_mems
-        # print(self.gru_mems)
         glance = self.seg_to_trimap(glance)
-        
-        self.save_bg = self.save_bg or (isinstance(bg, torch.Tensor) and (bg.size(2) in [3, 4]))
-        
         self.masks = self.tensor_cat(self.masks, pha[0].cpu(), self.current_out_t)
         self.glance_outs = self.tensor_cat(self.glance_outs, glance[0].cpu(), self.current_out_t)
         self.focus_outs = self.tensor_cat(self.focus_outs, focus[0].cpu(), self.current_out_t)
-        if self.save_bg:
-            self.bgs = self.tensor_cat(self.bgs, bg[0, :, :3].cpu(), self.current_out_t)
-
-        # if self.masks is None:
-        #     self.masks = pha[0].cpu() 
-        #     self.glance_outs = glance[0].cpu()
-        #     self.focus_outs = focus[0].cpu()
-        #     if self.save_bg:
-        #         self.bgs = bg[0, :, :3].cpu()
-        # else:
-        #     self.masks = torch.cat([self.masks, pha[0].cpu()], 0)
-        #     self.glance_outs = torch.cat([self.glance_outs, glance[0].cpu()], 0)
-        #     self.focus_outs = torch.cat([self.focus_outs, focus[0].cpu()], 0)
-        #     if self.save_bg:
-        #         self.bgs = torch.cat([self.bgs, bg[0, :, :3].cpu()], 0)
         return pha
 
     def _forward_fg(self, query_imgs, memory_img, memory_mask):

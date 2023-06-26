@@ -5,6 +5,7 @@ from FTPVM.module import *
 from FTPVM.inference_model import *
 
 
+# id, model name defined in model/which_model.py, Inference class, model path
 inference_model_list = [
     ('FTPVM', 'FTPVM', InferenceCoreRecurrentMemory, 
 	'./saves/ftpvm.pth'),

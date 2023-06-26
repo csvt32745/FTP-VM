@@ -53,18 +53,16 @@ class InferenceSpeedTest:
                 rec = self.model.default_rec
             else:
                 rec = [None]*4
-                # rec = [rec]*2
-                # rec = [rec, [None]]
-            print(rec)
             # mk, mv = self.model.encode_imgs_to_value(mimg, mask)
-            rec = self.model(qimg, mimg, mask, *rec, downsample_ratio=downsample_ratio)[-2]
+            rec = self.model(qimg, mimg, mask, *rec, downsample_ratio=downsample_ratio)[-1]
 
             t = time()
             for _ in tqdm(range(N)):
-                # rec = self.model.forward_with_memory(qimg, mk, mv, *rec)[-2]
-                rec = self.model(qimg, mimg, mask, *rec, downsample_ratio=downsample_ratio)[-2]
+                # rec = self.model.forward_with_memory(qimg, mk, mv, *rec)[-1]
+                rec = self.model(qimg, mimg, mask, *rec, downsample_ratio=downsample_ratio)[-1]
                 torch.cuda.synchronize()
             t = time()-t
+            
         print("FPS: ", N / t)
 
 if __name__ == '__main__':

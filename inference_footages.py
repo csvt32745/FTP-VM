@@ -10,10 +10,10 @@ parser.add_argument('--seq_chunk', help='the frames to process in a batch', defa
 args = parser.parse_args()
 
 from inference_model_list import inference_model_list
+from inference_footages_util import convert_video
 from model.which_model import get_model_by_string
 import torch
 import os
-from inference_test import convert_video
 os.environ['CUDA_VISIBLE_DEVICES']=str(args.gpu)
 
 root = args.root
@@ -23,7 +23,6 @@ os.makedirs(outroot, exist_ok=True)
 model_attr = inference_model_list[model_name]
 model = get_model_by_string(model_attr[1])().to(device='cuda')
 model.load_state_dict(torch.load(model_attr[3]))
-# check_and_load_model_dict(model, torch.load(model_attr[3]))
 
 
 files = os.listdir(root)
