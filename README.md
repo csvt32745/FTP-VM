@@ -8,6 +8,11 @@ Implementation and videos of **End-to-End Video Matting With Trimap Propagation*
 
 ![](assets/diagram.gif)
 
+FTP-VM tries to integrate the trimap propagation and video matting into 1 model, and improves the efficiency. It can matte a 1024x576 video in 40 FPS on a RTX2080ti GPU, while previous works are in about 5 FPS.
+
+- Given 1 or few pairs of memory trimaps and frames, FTP-VM is able to matte a video with arbitrary salient objects.
+- We hope this work can encourage future research of fast universal video matting
+
 # Roadmap
 - [x] Clean the training code & data
 - [x] Clean the dataset inference code & data
@@ -17,7 +22,7 @@ Implementation and videos of **End-to-End Video Matting With Trimap Propagation*
 
 
 # Installation
-The version of pytorch used in our experiments is 1.8.2, but it should work in most versions.\
+The version of pytorch used in our experiments is 1.8.2, but it should work with other versions.\
 Install pytorch in the old version at https://pytorch.org/get-started/previous-versions \
 Feel free to edit versions of packages for convenience.
 ```
@@ -68,6 +73,7 @@ Please place the desired datasets into the same folder (or by  symbolic link).
       --resize 1024 576 \
       --trimap_width 25
     ```
+  - Edit parameters if you want to inference with different resolution
 - Real Human Dataset: https://github.com/TiantianWang/VideoMatting-CRGNN
 
 ### Inference
