@@ -58,7 +58,7 @@ Please place the desired datasets into the same folder (or by  symbolic link).
 - VM108: The same source as training data https://github.com/yunkezhang/TCVOM#videomatting108-dataset
 - RVM
   - Download VM240k HD format at https://grail.cs.washington.edu/projects/background-matting-v2/#/datasets
-  - Download DVM background video and unzip it
+  - Download DVM background video https://drive.google.com/file/d/1n2GMVnqJgihypwH_9IiHbhP9PWeCgpEt/view?usp=sharing and unzip it
   - Run 
     ```
     python generate_videomatte_with_background_video.py \
