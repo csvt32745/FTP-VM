@@ -197,8 +197,14 @@ Please put them in `dataset` folder at the same level (or symbolic link) as `FTP
     - Train
   - VideoMatting108
     - BG_done
+        - (Video 0)
+        - (Video 1)
+        - ...
     - FG_done
-    - ...
+        - ...
+    - train_videos.txt
+    - val_videos.txt
+    - frame_corr.json
   - BG20k
     - BG-20k
   - YoutubeVIS
